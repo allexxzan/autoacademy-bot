@@ -1,2 +1,5 @@
 [build]
-start = "bash entrypoint.sh"
+command = "pip install -r requirements.txt"
+
+[deploy]
+command = "python new_bot.py"
