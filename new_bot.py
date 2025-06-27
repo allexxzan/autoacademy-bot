@@ -211,7 +211,13 @@ async def test(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ──────────── MAIN ────────────
 if __name__ == "__main__":
     print("🟢 Скрипт начал выполнение!")
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
+    
+    app = (
+    ApplicationBuilder()
+    .token(BOT_TOKEN)
+    .job_queue(JobQueue())  # Явное создание JobQueue
+    .build()
+    )
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("stats", stats))
