@@ -2,4 +2,4 @@
 command = "pip install -r requirements.txt"
 
 [deploy]
-command = "./entrypoint.sh"  # Или "python new_bot.py", если без entrypoint.sh
+command = "python new_bot.py"
