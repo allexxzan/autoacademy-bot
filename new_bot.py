@@ -196,6 +196,7 @@ async def kick_expired_members(context: ContextTypes.DEFAULT_TYPE):
 # ──────────── При запуске ────────────
 async def on_startup(app):
     try:
+        await app.bot.delete_webhook(drop_pending_updates=True)
         logging.info("🚀 Бот запущен.")
         pool = await get_db_pool()
         app.bot_data["db"] = pool
