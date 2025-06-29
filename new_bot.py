@@ -64,10 +64,24 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text("⚠️ Этот токен уже использован.")
                 return
 
-            await conn.execute("UPDATE tokens SET used = TRUE, user_id = $1 WHERE token = $2", user.id, token)
-            await update.message.reply_text("✅ Ты успешно вошёл. Добро пожаловать!")
+            # Новый расчёт подписки на 10 минут
+            subscription_ends = now + datetime.timedelta(minutes=10)
+            await conn.execute(
+                "UPDATE tokens SET used = TRUE, user_id = $1, subscription_ends = $2 WHERE token = $3",
+                user.id, subscription_ends, token
+            )
+
+            # Лог
+            logging.info(f"✅ Пользователь @{username} подписался. Подписка до {subscription_ends} UTC.")
+
+            ends_msk = subscription_ends.replace(tzinfo=pytz.utc).astimezone(MOSCOW_TZ)
+            await update.message.reply_text(
+                f"✅ Ты успешно подписался на канал.\n"
+                f"Подписка активна до: {ends_msk.strftime('%Y-%m-%d %H:%M:%S %Z')}."
+            )
             return
 
+        # Если нет args — ищем активный токен
         row = await conn.fetchrow("""
             SELECT * FROM tokens
             WHERE username = $1 AND used = FALSE AND expires > $2
@@ -82,6 +96,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
+        # Генерируем новый токен
         token = uuid.uuid4().hex[:8]
         expires = now + datetime.timedelta(hours=1)
         subscription_ends = now + datetime.timedelta(minutes=10)
@@ -103,6 +118,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"Срок действия: до {expires_msk.strftime('%Y-%m-%d %H:%M:%S %Z')}"
         )
 
+        logging.info(f"🎟️ Сгенерирован токен для @{username} — истекает в {expires} UTC.")
 
 # ──────────── Команда /stats ────────────
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
