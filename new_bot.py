@@ -84,6 +84,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         token = uuid.uuid4().hex[:8]
         expires = now + datetime.timedelta(hours=1)
+        subscription_ends = now + datetime.timedelta(minutes=10)
         invite: ChatInviteLink = await context.bot.create_chat_invite_link(
             chat_id=CHANNEL_ID,
             expire_date=expires,
@@ -91,9 +92,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
         await conn.execute("""
-            INSERT INTO tokens (token, username, user_id, invite_link, expires, used)
-            VALUES ($1, $2, $3, $4, $5, FALSE)
-        """, token, username, user.id, invite.invite_link, expires)
+            INSERT INTO tokens (token, username, user_id, invite_link, expires, subscription_ends, used)
+            VALUES ($1, $2, $3, $4, $5, $6, FALSE)
+        """, token, username, user.id, invite.invite_link, expires, subscription_ends)
 
         expires_msk = expires.replace(tzinfo=pytz.utc).astimezone(MOSCOW_TZ)
         await update.message.reply_text(
@@ -148,6 +149,7 @@ async def reissue(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     now = datetime.datetime.utcnow()
     expires = now + datetime.timedelta(hours=1)
+    subscription_ends = now + datetime.timedelta(minutes=10)
     token = uuid.uuid4().hex[:8]
     invite = await context.bot.create_chat_invite_link(
         chat_id=CHANNEL_ID,
@@ -158,9 +160,9 @@ async def reissue(update: Update, context: ContextTypes.DEFAULT_TYPE):
     async with context.application.bot_data["db"].acquire() as conn:
         await conn.execute("DELETE FROM tokens WHERE username = $1", username)
         await conn.execute("""
-            INSERT INTO tokens (token, username, user_id, invite_link, expires, used)
-            VALUES ($1, $2, $3, $4, $5, FALSE)
-        """, token, username, 0, invite.invite_link, expires)
+            INSERT INTO tokens (token, username, user_id, invite_link, expires, subscription_ends, used)
+            VALUES ($1, $2, $3, $4, $5, $6, FALSE)
+        """, token, username, 0, invite.invite_link, expires, subscription_ends)
 
     expires_msk = expires.replace(tzinfo=pytz.utc).astimezone(MOSCOW_TZ)
     await update.message.reply_text(
@@ -170,28 +172,43 @@ async def reissue(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-# ──────────── Удаление просроченных ────────────
+# ──────────── Удаление просроченных и предупреждение ────────────
 async def kick_expired_members(context: ContextTypes.DEFAULT_TYPE):
     now = datetime.datetime.utcnow()
 
     async with context.application.bot_data["db"].acquire() as conn:
         rows = await conn.fetch("""
             SELECT * FROM tokens
-            WHERE used = TRUE AND expires < $1
-        """, now)
+            WHERE used = TRUE AND subscription_ends IS NOT NULL
+        """)
 
         for row in rows:
             user_id = row["user_id"]
-            try:
-                await context.bot.ban_chat_member(CHANNEL_ID, user_id)
-                await context.bot.unban_chat_member(CHANNEL_ID, user_id)
-                await context.bot.send_message(user_id, "⏰ Твой доступ к каналу АвтоАкадемии истёк.")
-                logging.info(f"Пользователь {user_id} удалён.")
-            except Exception as e:
-                logging.warning(f"❌ Ошибка удаления {user_id}: {e}")
+            subscription_ends = row["subscription_ends"]
 
-        await conn.execute("DELETE FROM tokens WHERE used = TRUE AND expires < $1", now)
+            if not subscription_ends:
+                continue
 
+            time_left = (subscription_ends - now).total_seconds()
+
+            # ⚠ Предупреждение за минуту
+            if 50 <= time_left <= 70:
+                try:
+                    await context.bot.send_message(user_id, "⏳ Осталась 1 минута до окончания подписки!")
+                except Exception as e:
+                    logging.warning(f"⚠️ Не удалось отправить предупреждение {user_id}: {e}")
+
+            # 🧨 Удаление
+            if time_left <= 0:
+                try:
+                    await context.bot.ban_chat_member(CHANNEL_ID, user_id)
+                    await context.bot.unban_chat_member(CHANNEL_ID, user_id)
+                    await context.bot.send_message(user_id, "⏰ Твоя подписка завершена, доступ к каналу закрыт.")
+                    logging.info(f"Пользователь {user_id} удалён.")
+                except Exception as e:
+                    logging.warning(f"❌ Ошибка удаления {user_id}: {e}")
+
+                await conn.execute("DELETE FROM tokens WHERE user_id = $1", user_id)
 
 # ──────────── При запуске ────────────
 async def on_startup(app):
@@ -200,24 +217,26 @@ async def on_startup(app):
         logging.info("🚀 Бот запущен.")
         pool = await get_db_pool()
         app.bot_data["db"] = pool
-        app.job_queue.run_repeating(kick_expired_members, interval=300, first=5)
+        app.job_queue.run_repeating(kick_expired_members, interval=30, first=5)
     except Exception as e:
         logging.error(f"❌ Ошибка при запуске: {e}")
         raise
+
 
 # ──────────── Команда /test ────────────
 async def test(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("✅ Бот работает!")
 
+
 # ──────────── MAIN ────────────
 if __name__ == "__main__":
     print("🟢 Скрипт начал выполнение!")
-    
+
     app = (
-    ApplicationBuilder()
-    .token(BOT_TOKEN)
-    .job_queue(JobQueue())  # Явное создание JobQueue
-    .build()
+        ApplicationBuilder()
+        .token(BOT_TOKEN)
+        .job_queue(JobQueue())
+        .build()
     )
 
     app.add_handler(CommandHandler("start", start))
