@@ -6,20 +6,18 @@ from dotenv import load_dotenv
 load_dotenv()
 DATABASE_URL = os.getenv("DATABASE_URL")
 
-async def create_tokens_table():
+async def add_subscription_ends_column():
     conn = await asyncpg.connect(DATABASE_URL)
-    await conn.execute("""
-        CREATE TABLE IF NOT EXISTS tokens (
-            token TEXT PRIMARY KEY,
-            username TEXT NOT NULL,
-            user_id BIGINT,
-            invite_link TEXT NOT NULL,
-            expires TIMESTAMPTZ NOT NULL,
-            used BOOLEAN DEFAULT FALSE
-        )
-    """)
-    await conn.close()
-    print("✅ Таблица tokens успешно создана (или уже существует).")
+    try:
+        await conn.execute("""
+            ALTER TABLE tokens
+            ADD COLUMN IF NOT EXISTS subscription_ends TIMESTAMPTZ;
+        """)
+        print("✅ Колонка subscription_ends успешно добавлена.")
+    except Exception as e:
+        print(f"❌ Ошибка: {e}")
+    finally:
+        await conn.close()
 
 if __name__ == "__main__":
-    asyncio.run(create_tokens_table())
+    asyncio.run(add_subscription_ends_column())
