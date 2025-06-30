@@ -132,6 +132,7 @@ async def kick_expired_members(context: ContextTypes.DEFAULT_TYPE):
                     user_id = member_info.user.id
                     await conn.execute("UPDATE tokens SET user_id = $1 WHERE username = $2", user_id, username)
                     logging.info(f"🔄 Обновлён user_id для @{username}: {user_id}")
+                    logging.info(f"✅ @{username} уже в канале, добавлен в список на автокик")
                 except Exception as e:
                     logging.warning(f"⚠️ Не удалось обновить user_id для @{username}: {e}")
                     continue  # Переход к следующему
