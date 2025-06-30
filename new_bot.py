@@ -20,7 +20,7 @@ MOSCOW_TZ = pytz.timezone('Europe/Moscow')
 approved_usernames = {
     "pankrat00", "milena_lifestyle1", "simonaee", "majjjya", "Alexart123",
     "nirta_66", "fekaloud", "nastyushkiiins", "anakrasln", "srgv_v",
-    "ashkinarylit", "autoacadem10", "avirmary", "katei1"
+    "ashkinarylit", "autoacadem10", "avirmary", "katei1", "artchis01"
 }
 
 logging.basicConfig(
