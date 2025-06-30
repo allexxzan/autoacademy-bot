@@ -118,29 +118,42 @@ async def kick_expired_members(context: ContextTypes.DEFAULT_TYPE):
 
             time_left = (subscription_ends - now).total_seconds()
 
-            # ⚠️ Предупреждение ЗА МИНУТУ, только если человек ВСТУПИЛ в канал
-            if 50 <= time_left <= 70:
-                try:
-                    member = await context.bot.get_chat_member(CHANNEL_ID, user_id)
-                    if member.status in ['member', 'administrator']:
-                        await context.bot.send_message(user_id, "⏳ Осталась 1 минута до окончания подписки!")
-                except Exception as e:
-                    logging.warning(f"Не удалось отправить предупреждение {user_id}: {e}")
+            try:
+                # Проверяем, состоит ли в канале
+                member = await context.bot.get_chat_member(CHANNEL_ID, user_id)
+                is_in_chat = member.status in ['member', 'administrator']
 
-            # ⛔️ Подписка истекла — кикаем, если он в канале
-            if time_left <= 0:
-                try:
-                    member = await context.bot.get_chat_member(CHANNEL_ID, user_id)
-                    if member.status in ['member', 'administrator']:
+                # ЛОГИРОВАНИЕ
+                logging.info(f"[⏳] Пользователь {user_id}: time_left={time_left:.1f}s, in_chat={is_in_chat}")
+
+                # Предупреждение за 1 минуту (только если в канале и не отправлено ещё)
+                if 50 <= time_left <= 70 and is_in_chat:
+                    try:
+                        await context.bot.send_message(
+                            user_id,
+                            "⏳ Осталась 1 минута до окончания подписки!"
+                        )
+                        logging.info(f"[⚠️] Предупреждение отправлено пользователю {user_id}")
+                    except Exception as e:
+                        logging.warning(f"[!] Не удалось отправить предупреждение {user_id}: {e}")
+
+                # Кик по окончанию
+                if time_left <= 0 and is_in_chat:
+                    try:
                         await context.bot.ban_chat_member(CHANNEL_ID, user_id)
                         await context.bot.unban_chat_member(CHANNEL_ID, user_id)
-                        await context.bot.send_message(user_id, "⏰ Твоя подписка завершена, доступ к каналу закрыт.")
-                        logging.info(f"Пользователь {user_id} удалён из канала.")
-                except Forbidden:
-                    logging.warning(f"Нет прав на удаление пользователя {user_id}")
-                except Exception as e:
-                    logging.error(f"Ошибка при удалении пользователя {user_id}: {e}")
-
+                        await context.bot.send_message(
+                            user_id,
+                            "⏰ Ваша подписка завершена, доступ к каналу закрыт."
+                        )
+                        logging.info(f"[🧨] Пользователь {user_id} кикнут.")
+                    except Exception as e:
+                        logging.warning(f"[!] Ошибка кика пользователя {user_id}: {e}")
+                elif time_left <= 0 and not is_in_chat:
+                    logging.info(f"[ℹ️] Пользователь {user_id} не в канале, не кикаем.")
+                    
+            except Exception as e:
+                logging.error(f"[!] Ошибка при проверке пользователя {user_id}: {e}")
 # ─────────────── /REISSUE ───────────────
 async def reissue(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
