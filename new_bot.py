@@ -103,10 +103,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logging.info(f"Выдан доступ @{username} (ID: {user.id}) до {subscription_ends}")
 
 async def kick_expired_members(context: ContextTypes.DEFAULT_TYPE):
-    if user_id == 0:
-    user = await context.bot.get_chat(username)
-    user_id = user.id
-    
     logging.info("🔔 Проверка истекших подписок")
 
     now_utc = datetime.datetime.utcnow().replace(tzinfo=pytz.utc)
