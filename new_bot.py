@@ -8,9 +8,9 @@ from dotenv import load_dotenv
 
 from telegram import Update, ChatInviteLink
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, JobQueue
-from telegram.error import Forbidden
+from telegram.error import Forbidden, BadRequest
 
-# ──────────── НАСТРОЙКИ ────────────
+# ─────── НАСТРОЙКИ ───────
 load_dotenv()
 DATABASE_URL = os.getenv("DATABASE_URL")
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -18,7 +18,7 @@ ADMIN_ID = 5744533263
 CHANNEL_ID = -1002673430364
 MOSCOW_TZ = pytz.timezone("Europe/Moscow")
 
-logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=logging.INFO)
+logging.basicConfig(level=logging.INFO)
 
 approved_usernames = {
     "pankrat00", "milena_lifestyle1", "simonaee", "majjjya", "Alexart123",
@@ -26,19 +26,19 @@ approved_usernames = {
     "ashkinarylit", "autoacadem10", "avirmary", "katei1"
 }
 
-# ──────────── ПОДКЛЮЧЕНИЕ К БД ────────────
+# ─────── БАЗА ───────
 async def get_db_pool():
     return await asyncpg.create_pool(DATABASE_URL)
 
 
-# ──────────── /start ────────────
+# ─────── /start ───────
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     username = user.username
     now = datetime.datetime.utcnow()
 
     if not username:
-        await update.message.reply_text("Добавь username в настройках Telegram.")
+        await update.message.reply_text("У тебя не указан username. Добавь его в настройках Telegram.")
         return
 
     if username not in approved_usernames:
@@ -46,38 +46,38 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     async with context.application.bot_data["db"].acquire() as conn:
-        # Проверка активной подписки
-        active_sub = await conn.fetchrow("""
-            SELECT * FROM tokens
+        # Есть активная подписка?
+        active = await conn.fetchrow("""
+            SELECT * FROM tokens 
             WHERE username = $1 AND used = TRUE AND subscription_ends > $2
-            ORDER BY subscription_ends DESC
-            LIMIT 1
+            ORDER BY subscription_ends DESC LIMIT 1
         """, username, now)
 
-        if active_sub:
-            sub_msk = active_sub["subscription_ends"].replace(tzinfo=pytz.utc).astimezone(MOSCOW_TZ)
+        if active:
+            ends_msk = active["subscription_ends"].replace(tzinfo=pytz.utc).astimezone(MOSCOW_TZ)
             await update.message.reply_text(
-                f"ℹ️ У тебя уже есть активная подписка до {sub_msk.strftime('%Y-%m-%d %H:%M:%S %Z')}.\n"
-                f"Если возникли трудности — обратись к админу."
+                f"✅ У тебя уже есть активная подписка до {ends_msk.strftime('%Y-%m-%d %H:%M:%S %Z')}.\n"
+                f"Ссылка: {active['invite_link']}\n\n"
+                f"Если возникли сложности, обратись к администратору."
             )
             return
 
-        # Проверка неиспользованного токена
-        unused = await conn.fetchrow("""
+        # Есть неиспользованный токен?
+        row = await conn.fetchrow("""
             SELECT * FROM tokens
             WHERE username = $1 AND used = FALSE AND expires > $2
             LIMIT 1
         """, username, now)
 
-        if unused:
-            expires_msk = unused["expires"].replace(tzinfo=pytz.utc).astimezone(MOSCOW_TZ)
+        if row:
+            expires_msk = row["expires"].replace(tzinfo=pytz.utc).astimezone(MOSCOW_TZ)
             await update.message.reply_text(
-                f"🔑 У тебя есть неиспользованная ссылка:\n{unused['invite_link']}\n"
-                f"Действует до: {expires_msk.strftime('%Y-%m-%d %H:%M:%S %Z')}"
+                f"🔑 У тебя уже есть неиспользованная ссылка:\n{row['invite_link']}\n"
+                f"Срок действия: до {expires_msk.strftime('%Y-%m-%d %H:%M:%S %Z')}"
             )
             return
 
-        # Генерация новой ссылки
+        # Новый токен
         token = uuid.uuid4().hex[:8]
         expires = now + datetime.timedelta(hours=1)
         subscription_ends = now + datetime.timedelta(minutes=10)
@@ -90,7 +90,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         except Exception as e:
             logging.error(f"Ошибка создания ссылки: {e}")
-            await update.message.reply_text("⚠️ Ошибка создания ссылки. Попробуйте позже.")
+            await update.message.reply_text("⚠️ Не удалось создать ссылку. Попробуй позже.")
             return
 
         await conn.execute("""
@@ -106,57 +106,38 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 
-# ──────────── kick_expired_members ────────────
-async def kick_expired_members(context: ContextTypes.DEFAULT_TYPE):
-    now = datetime.datetime.utcnow()
-
-    async with context.application.bot_data["db"].acquire() as conn:
-        rows = await conn.fetch("""
-            SELECT * FROM tokens
-            WHERE used = TRUE AND subscription_ends IS NOT NULL
-        """)
-
-        for row in rows:
-            user_id = row["user_id"]
-            ends = row["subscription_ends"]
-            time_left = (ends - now).total_seconds()
-
-            # За минуту до окончания
-            if 50 <= time_left <= 70:
-                try:
-                    await context.bot.send_message(user_id, "⏳ Осталась 1 минута до окончания подписки.")
-                except Exception as e:
-                    logging.warning(f"⚠️ Не удалось отправить предупреждение: {e}")
-
-            # Удаление, если срок вышел
-            if time_left <= 0:
-                try:
-                    member = await context.bot.get_chat_member(CHANNEL_ID, user_id)
-                    if member.status in ["member", "administrator"]:
-                        await context.bot.ban_chat_member(CHANNEL_ID, user_id)
-                        await context.bot.unban_chat_member(CHANNEL_ID, user_id)
-                        await context.bot.send_message(user_id, "⏰ Подписка завершена. Доступ к каналу закрыт.")
-                        logging.info(f"Пользователь {user_id} удалён.")
-                    await conn.execute("DELETE FROM tokens WHERE user_id = $1", user_id)
-                except Forbidden:
-                    logging.warning(f"Нет прав на удаление пользователя {user_id}")
-                except Exception as e:
-                    logging.error(f"❌ Ошибка удаления {user_id}: {e}")
-
-
-# ──────────── Админские команды ────────────
+# ─────── /stats ───────
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("Доступ запрещён.")
         return
-
+    
     async with context.application.bot_data["db"].acquire() as conn:
         total = await conn.fetchval("SELECT COUNT(*) FROM tokens")
         unused = await conn.fetchval("SELECT COUNT(*) FROM tokens WHERE used = FALSE")
         await update.message.reply_text(f"Всего токенов: {total}\nНеиспользованных: {unused}")
 
 
+# ─────── /remove ───────
+async def remove_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("Доступ запрещён.")
+        return
+
+    if not context.args:
+        await update.message.reply_text("Использование: /remove username")
+        return
+
+    username = context.args[0].lstrip("@")
+    async with context.application.bot_data["db"].acquire() as conn:
+        await conn.execute("DELETE FROM tokens WHERE username = $1", username)
+        await update.message.reply_text(f"Все токены для @{username} удалены.")
+
+
+# ─────── /reissue ───────
 async def reissue(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("Доступ запрещён.")
         return
 
     if not context.args:
@@ -165,7 +146,7 @@ async def reissue(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     username = context.args[0].lstrip("@")
     if username not in approved_usernames:
-        await update.message.reply_text("❌ Пользователь не в базе.")
+        await update.message.reply_text("Пользователь не найден в списке учеников.")
         return
 
     now = datetime.datetime.utcnow()
@@ -180,8 +161,7 @@ async def reissue(update: Update, context: ContextTypes.DEFAULT_TYPE):
             member_limit=1
         )
     except Exception as e:
-        logging.error(f"Ошибка создания ссылки: {e}")
-        await update.message.reply_text("Ошибка при создании ссылки.")
+        await update.message.reply_text(f"Ошибка создания ссылки: {e}")
         return
 
     async with context.application.bot_data["db"].acquire() as conn:
@@ -191,17 +171,64 @@ async def reissue(update: Update, context: ContextTypes.DEFAULT_TYPE):
             VALUES ($1, $2, $3, $4, $5, $6, TRUE)
         """, token, username, 0, invite.invite_link, expires, subscription_ends)
 
-    await update.message.reply_text(f"✅ Новая ссылка: {invite.invite_link}")
+    sub_msk = subscription_ends.replace(tzinfo=pytz.utc).astimezone(MOSCOW_TZ)
+    await update.message.reply_text(
+        f"✅ Новый токен для @{username}:\n"
+        f"{invite.invite_link}\n"
+        f"Подписка до: {sub_msk.strftime('%Y-%m-%d %H:%M:%S %Z')}"
+    )
 
 
+# ─────── АВТОКИК ───────
+async def kick_expired_members(context: ContextTypes.DEFAULT_TYPE):
+    now = datetime.datetime.utcnow()
+
+    async with context.application.bot_data["db"].acquire() as conn:
+        expired = await conn.fetch("""
+            SELECT * FROM tokens
+            WHERE used = TRUE AND subscription_ends <= $1
+        """, now)
+
+        for row in expired:
+            user_id = row["user_id"]
+
+            try:
+                member = await context.bot.get_chat_member(CHANNEL_ID, user_id)
+                if member.status in ['member', 'administrator']:
+                    await context.bot.ban_chat_member(CHANNEL_ID, user_id)
+                    await context.bot.unban_chat_member(CHANNEL_ID, user_id)
+                    await context.bot.send_message(user_id, "⏰ Твоя подписка завершена, доступ к каналу закрыт.")
+                    logging.info(f"✅ Кикнут: {user_id}")
+            except Forbidden:
+                logging.warning(f"⚠️ Нет прав удалить {user_id}")
+            except BadRequest as e:
+                logging.warning(f"❗ BadRequest: {e}")
+            except Exception as e:
+                logging.error(f"❌ Ошибка при кике {user_id}: {e}")
+
+            await conn.execute("DELETE FROM tokens WHERE user_id = $1", user_id)
+
+        # Предупреждение за 1 минуту
+        warning_users = await conn.fetch("""
+            SELECT user_id, subscription_ends FROM tokens
+            WHERE used = TRUE AND subscription_ends > $1 AND subscription_ends <= $2
+        """, now + datetime.timedelta(seconds=50), now + datetime.timedelta(seconds=70))
+
+        for row in warning_users:
+            try:
+                await context.bot.send_message(row["user_id"], "⏳ Осталась 1 минута до окончания подписки!")
+            except Exception as e:
+                logging.warning(f"⚠️ Не удалось предупредить {row['user_id']}: {e}")
+
+
+# ─────── ЗАПУСК ───────
 async def on_startup(app):
-    pool = await get_db_pool()
-    app.bot_data["db"] = pool
+    await app.bot.delete_webhook(drop_pending_updates=True)
+    app.bot_data["db"] = await get_db_pool()
     app.job_queue.run_repeating(kick_expired_members, interval=30, first=5)
-    logging.info("🚀 Бот запущен и готов к работе.")
+    logging.info("🚀 Бот запущен!")
 
 
-# ──────────── MAIN ────────────
 if __name__ == "__main__":
     app = (
         ApplicationBuilder()
@@ -212,6 +239,7 @@ if __name__ == "__main__":
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("stats", stats))
+    app.add_handler(CommandHandler("remove", remove_user))
     app.add_handler(CommandHandler("reissue", reissue))
 
     app.post_init = on_startup
