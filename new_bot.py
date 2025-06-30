@@ -102,6 +102,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         logging.info(f"Выдан доступ @{username} (ID: {user.id}) до {subscription_ends}")
 
+
+# ─────────────── /АВТО-КИК ───────────────
 async def kick_expired_members(context: ContextTypes.DEFAULT_TYPE):
     logging.info("🔔 Проверка истекших подписок")
 
@@ -112,7 +114,6 @@ async def kick_expired_members(context: ContextTypes.DEFAULT_TYPE):
             SELECT * FROM tokens
             WHERE used = TRUE
               AND subscription_ends IS NOT NULL
-              AND user_id != 0
         """)
 
         if not rows:
@@ -123,6 +124,17 @@ async def kick_expired_members(context: ContextTypes.DEFAULT_TYPE):
             user_id = row["user_id"]
             username = row["username"]
             subscription_ends = row["subscription_ends"]
+
+            # Обновим user_id, если он был 0 (например, после /reissue)
+            if user_id == 0:
+                try:
+                    member_info = await context.bot.get_chat_member(CHANNEL_ID, username)
+                    user_id = member_info.user.id
+                    await conn.execute("UPDATE tokens SET user_id = $1 WHERE username = $2", user_id, username)
+                    logging.info(f"🔄 Обновлён user_id для @{username}: {user_id}")
+                except Exception as e:
+                    logging.warning(f"⚠️ Не удалось обновить user_id для @{username}: {e}")
+                    continue  # Переход к следующему
 
             if subscription_ends.tzinfo is None:
                 subscription_ends = subscription_ends.replace(tzinfo=pytz.utc)
