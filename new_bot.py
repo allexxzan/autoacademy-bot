@@ -7,7 +7,7 @@ import datetime
 from dotenv import load_dotenv
 from telegram import Update, ChatInviteLink
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, JobQueue
-from telegram.error import Forbidden
+from telegram.error import Forbidden, BadRequest
 
 # ─────────────── НАСТРОЙКИ ───────────────
 load_dotenv()
@@ -23,7 +23,10 @@ approved_usernames = {
     "ashkinarylit", "autoacadem10", "avirmary", "katei1"
 }
 
-logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=logging.INFO)
+logging.basicConfig(
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
 
 # ─────────────── БАЗА ───────────────
 async def get_db_pool():
@@ -97,10 +100,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"Ссылка для входа: {invite.invite_link}\n"
             f"Подписка активна до: {ends_msk.strftime('%Y-%m-%d %H:%M:%S %Z')}"
         )
-        logging.info(f"Выдан доступ @{username} до {subscription_ends}")
+        logging.info(f"Выдан доступ @{username} (ID: {user.id}) до {subscription_ends}")
 
 # ─────────────── УВЕДОМЛЕНИЕ И АВТОКИК ───────────────
 async def kick_expired_members(context: ContextTypes.DEFAULT_TYPE):
+    logging.info("🔔 Запуск проверки на истекшие подписки")
     now_utc = datetime.datetime.now(datetime.timezone.utc)
 
     async with context.application.bot_data["db"].acquire() as conn:
@@ -109,16 +113,21 @@ async def kick_expired_members(context: ContextTypes.DEFAULT_TYPE):
             WHERE used = TRUE AND subscription_ends IS NOT NULL
         """)
 
+        if not rows:
+            logging.info("Нет активных подписок для проверки")
+            return
+
         for row in rows:
             user_id = row["user_id"]
+            username = row["username"]
             subscription_ends = row["subscription_ends"]
 
             # Проверка user_id
             if user_id == 0 or not subscription_ends:
-                logging.info(f"[⚠️] Пропускаем user_id={user_id}, subscription_ends={subscription_ends}")
+                logging.info(f"Пропускаем user_id={user_id} (невалидные данные)")
                 continue
 
-            # Всегда приводим к UTC, на всякий
+            # Приводим время к UTC
             if subscription_ends.tzinfo is None:
                 subscription_ends = subscription_ends.replace(tzinfo=datetime.timezone.utc)
 
@@ -129,39 +138,48 @@ async def kick_expired_members(context: ContextTypes.DEFAULT_TYPE):
                 member = await context.bot.get_chat_member(CHANNEL_ID, user_id)
                 is_in_chat = member.status in ['member', 'administrator', 'restricted']
 
-                logging.info(f"[🔍] Проверка user_id={user_id}: осталось {time_left:.1f}s, подписка до {subscription_ends}, в канале: {is_in_chat}")
+                logging.info(f"Проверка @{username} (ID: {user_id}): осталось {time_left:.1f} сек, в канале: {is_in_chat}")
 
-                # ───── УВЕДОМЛЕНИЕ ЗА 1 МИНУТУ ─────
-                if 0 < time_left <= 120 and is_in_chat:
+                # Уведомление за 5 минут
+                if 0 < time_left <= 300 and is_in_chat:
                     try:
                         await context.bot.send_message(
                             user_id,
-                            "⏳ Внимание! До окончания подписки осталось меньше 2 минут."
+                            "⏳ Внимание! До окончания подписки осталось меньше 5 минут."
                         )
-                        logging.info(f"[⚠️] Предупреждение отправлено user_id={user_id}")
+                        logging.info(f"Уведомление отправлено @{username} (ID: {user_id})")
+                    except Forbidden:
+                        logging.warning(f"Пользователь @{username} заблокировал бота")
                     except Exception as e:
-                        logging.warning(f"[!] Не удалось отправить предупреждение user_id={user_id}: {e}")
+                        logging.warning(f"Ошибка отправки уведомления @{username}: {e}")
 
-                # ───── УДАЛЕНИЕ ПОЛЬЗОВАТЕЛЯ ─────
+                # Удаление пользователя
                 if time_left <= 0:
                     if is_in_chat:
                         try:
                             await context.bot.ban_chat_member(CHANNEL_ID, user_id)
                             await context.bot.unban_chat_member(CHANNEL_ID, user_id)
-
-                            await context.bot.send_message(
-                                user_id,
-                                "⏰ Подписка завершена. Вы были удалены из канала."
-                            )
-                            logging.info(f"[🧨] user_id={user_id} кикнут из канала.")
+                            
+                            try:
+                                await context.bot.send_message(
+                                    user_id,
+                                    "⏰ Подписка завершена. Вы были удалены из канала."
+                                )
+                            except Exception:
+                                pass
+                                
+                            logging.info(f"Пользователь @{username} (ID: {user_id}) удален из канала")
+                        except Forbidden:
+                            logging.error(f"Нет прав для кика @{username} (ID: {user_id})")
+                        except BadRequest as e:
+                            logging.error(f"Ошибка Telegram API при кике @{username}: {e}")
                         except Exception as e:
-                            logging.warning(f"[!] Ошибка кика user_id={user_id}: {e}")
+                            logging.error(f"Неизвестная ошибка при кике @{username}: {e}")
                     else:
-                        logging.info(f"[ℹ️] user_id={user_id} уже не в канале. Пропускаем кик.")
+                        logging.info(f"Пользователь @{username} уже не в канале")
 
             except Exception as e:
-                logging.error(f"[💥] Ошибка при проверке user_id={user_id}: {e}")
-
+                logging.error(f"Ошибка при обработке @{username} (ID: {user_id}): {e}")
 
 # ─────────────── /REISSUE ───────────────
 async def reissue(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -220,7 +238,7 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"📊 Всего токенов: {total}\n"
             f"✅ Использованных: {used}\n"
             f"🕸 Неиспользованных: {unused}"
-        )       
+        )
 
 # ─────────────── При запуске ───────────────
 async def on_startup(app):
@@ -228,21 +246,21 @@ async def on_startup(app):
         await app.bot.delete_webhook(drop_pending_updates=True)
         logging.info("🚀 Бот запущен.")
 
-        # Создаём пул соединений с базой и кладём его в bot_data
+        # Создаем пул соединений с базой
         pool = await get_db_pool()
         app.bot_data["db"] = pool
+        logging.info("✅ Подключение к базе данных установлено")
 
-        # Планируем автокик каждые 30 секунд
-        app.job_queue.run_repeating(kick_expired_members, interval=30, first=5)
+        # Планируем автокик каждые 5 минут
+        app.job_queue.run_repeating(kick_expired_members, interval=300, first=10)
+        logging.info("⏳ Запущена периодическая проверка подписок (каждые 5 минут)")
     except Exception as e:
         logging.error(f"❌ Ошибка при запуске: {e}")
         raise
 
-
 # ─────────────── /test ───────────────
 async def test(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("✅ Бот работает!")
-
 
 # ─────────────── MAIN ───────────────
 if __name__ == "__main__":
