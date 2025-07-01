@@ -236,7 +236,14 @@ async def sendlink(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ Пользователь не найден в списке учеников.")
             return
 
-        await conn.execute("DELETE FROM tokens WHERE username = $1", username)
+        # Получаем user_id из последнего токена, даже просроченного
+        row = await conn.fetchrow("""
+            SELECT user_id FROM tokens 
+            WHERE username = $1 AND user_id IS NOT NULL AND user_id != 0
+            ORDER BY created_at DESC LIMIT 1
+        """, username)
+
+        user_id = row["user_id"] if row else None
 
         now = datetime.datetime.utcnow()
         expires = now + datetime.timedelta(hours=1)
@@ -254,14 +261,11 @@ async def sendlink(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("⚠️ Не удалось создать ссылку.")
             return
 
-        row = await conn.fetchrow("SELECT user_id FROM tokens WHERE username = $1 ORDER BY created_at DESC LIMIT 1", username)
-        user_id = row["user_id"] if row and row["user_id"] != 0 else None
-        stored_user_id = user_id if user_id else update.effective_user.id
-
+        # Записываем новый токен с user_id, если известен
         await conn.execute("""
             INSERT INTO tokens (token, username, user_id, invite_link, expires, subscription_ends, used)
             VALUES ($1, $2, $3, $4, $5, $6, TRUE)
-        """, token, username, stored_user_id, invite.invite_link, expires, subscription_ends)
+        """, token, username, user_id or 0, invite.invite_link, expires, subscription_ends)
 
         ends_msk = subscription_ends.replace(tzinfo=pytz.utc).astimezone(MOSCOW_TZ)
 
@@ -271,13 +275,15 @@ async def sendlink(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text(f"✅ Ссылка отправлена пользователю @{username} в личку.")
             except Exception as e:
                 logging.warning(f"❌ Не удалось отправить сообщение @{username}: {e}")
-                await update.message.reply_text("⚠️ Не удалось отправить ссылку в личку. Возможно, пользователь не писал боту.")
+                await update.message.reply_text(
+                    f"⚠️ Не удалось отправить ссылку в личку. Возможно, пользователь не писал боту."
+                )
         else:
             await update.message.reply_text(
-                f"⚠️ Ссылка создана, но пользователь ещё не писал боту. Передай ссылку вручную:\n{invite.invite_link}"
+                f"⚠️ Пользователь @{username} ещё не писал боту. Передай ссылку вручную:\n{invite.invite_link}"
             )
 
-        logging.info(f"🔁 Повторно выдана ссылка @{username} (user_id: {stored_user_id}) до {ends_msk}")
+        logging.info(f"🔁 Повторно выдана ссылка @{username} (user_id: {user_id}) до {ends_msk}")
 
 # ───────────── /STATS ─────────────
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
