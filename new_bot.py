@@ -109,12 +109,12 @@ async def kick_expired_members(context: ContextTypes.DEFAULT_TYPE):
     now_utc = datetime.datetime.utcnow().replace(tzinfo=pytz.utc)
 
     async with context.application.bot_data["db"].acquire() as conn:
-        # ── Шаг 1: Обновим нулевые user_id вручную (если есть)
+        # Шаг 1: Обновим нулевые user_id
         fixed_users = await conn.fetch("""
             UPDATE tokens
             SET user_id = (
                 SELECT user_id FROM (
-                    VALUES ('ashkinarylit', 773948478), ('katei1', 123456789)  -- Заменить на актуальные пары
+                    VALUES ('ashkinarylit', 773948478), ('katei1', 123456789)
                 ) AS fix(username, user_id)
                 WHERE fix.username = tokens.username
                 LIMIT 1
@@ -125,7 +125,7 @@ async def kick_expired_members(context: ContextTypes.DEFAULT_TYPE):
         if fixed_users:
             logging.info(f"🔄 Обновлены user_id вручную: {fixed_users}")
 
-        # ── Шаг 2: Проверим токены с активной подпиской
+        # Шаг 2: Проверка активных подписок
         rows = await conn.fetch("""
             SELECT * FROM tokens
             WHERE used = TRUE AND subscription_ends IS NOT NULL AND user_id != 0
@@ -134,27 +134,24 @@ async def kick_expired_members(context: ContextTypes.DEFAULT_TYPE):
         for row in rows:
             user_id = row["user_id"]
             username = row["username"]
-            subscription_ends = row["subscription_ends"].replace(tzinfo=pytz.utc) if row["subscription_ends"].tzinfo is None else row["subscription_ends"]
+            sub_ends = row["subscription_ends"].replace(tzinfo=pytz.utc)
 
             try:
                 member = await context.bot.get_chat_member(CHANNEL_ID, user_id)
                 is_in_chat = member.status in ['member', 'restricted']
             except BadRequest as e:
                 if "user not found" in str(e).lower():
-                    is_in_chat = False
                     logging.info(f"👤 @{username} не найден в канале.")
+                    is_in_chat = False
                 else:
                     logging.error(f"❌ Ошибка get_chat_member @{username}: {e}")
                     continue
 
-            time_left = (subscription_ends - now_utc).total_seconds()
+            time_left = (sub_ends - now_utc).total_seconds()
 
             if 0 < time_left <= 60 and is_in_chat:
                 try:
-                    await context.bot.send_message(
-                        user_id,
-                        "⚠️ Ваша подписка истекает через 1 минуту!"
-                    )
+                    await context.bot.send_message(user_id, "⚠️ Ваша подписка истекает через 1 минуту!")
                     logging.info(f"📢 Предупреждение отправлено @{username}")
                 except Exception as e:
                     logging.warning(f"⚠️ Не удалось уведомить @{username}: {e}")
@@ -167,39 +164,38 @@ async def kick_expired_members(context: ContextTypes.DEFAULT_TYPE):
                 except Exception as e:
                     logging.error(f"❌ Ошибка удаления @{username}: {e}")
 
-        # ── Шаг 3: Поиск "нелегальных" участников (не в tokens)
+        # Шаг 3: Удаление "нелегальных" участников
         logging.info("🔍 Проверка на нелегальных участников")
         try:
             admins = await context.bot.get_chat_administrators(CHANNEL_ID)
             admin_ids = [admin.user.id for admin in admins]
         except Exception as e:
             logging.error(f"❌ Не удалось получить список админов: {e}")
-            admin_ids = []
+            return
 
-        async for member in context.bot.get_chat_administrators(CHANNEL_ID):  # Работает как "get_chat_members", но ограничено
-            user_id = member.user.id
-            if user_id in admin_ids or member.status in ['administrator', 'creator']:
-                continue
+        # Здесь get_chat_administrators возвращает список, а не итератор
+        for admin in admins:
+            user_id = admin.user.id
+            if user_id in admin_ids:
+                continue  # Пропускаем админов
 
-            token_row = await conn.fetchrow("SELECT * FROM tokens WHERE user_id = $1", user_id)
+            token = await conn.fetchrow("SELECT * FROM tokens WHERE user_id = $1", user_id)
 
-            if not token_row:
+            if not token:
                 try:
                     await context.bot.ban_chat_member(CHANNEL_ID, user_id, until_date=int(now_utc.timestamp()) + 30)
-                    logging.info(f"🛑 Участник ID {user_id} удалён: нет записи в tokens")
+                    logging.info(f"🛑 Удалён неизвестный участник ID {user_id}")
                 except Exception as e:
-                    logging.warning(f"❌ Ошибка удаления неизвестного участника ID {user_id}: {e}")
+                    logging.warning(f"❌ Ошибка удаления неизвестного участника: {e}")
                 continue
 
-            # Есть, но подписка истекла
-            ends = token_row["subscription_ends"]
-            if ends and ends.replace(tzinfo=pytz.utc) < now_utc:
+            if token["subscription_ends"].replace(tzinfo=pytz.utc) < now_utc:
                 try:
                     await context.bot.ban_chat_member(CHANNEL_ID, user_id, until_date=int(now_utc.timestamp()) + 30)
                     await conn.execute("UPDATE tokens SET used = FALSE WHERE user_id = $1", user_id)
-                    logging.info(f"⌛ Участник ID {user_id} удалён — подписка истекла")
+                    logging.info(f"⌛ Удалён участник ID {user_id} — подписка истекла")
                 except Exception as e:
-                    logging.warning(f"❌ Ошибка удаления участника ID {user_id} с истекшей подпиской: {e}")
+                    logging.warning(f"❌ Ошибка удаления участника ID {user_id}: {e}")
 
 # ─────────────── /REISSUE ───────────────
 async def reissue(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -295,8 +291,8 @@ async def test(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ─────────────── MAIN ───────────────
 if __name__ == "__main__":
-    import os
-    os.system("pkill -f 'python.*getUpdates'")  # Принудительно завершаем старые процессы
+    # 🔒 Telegram API сам обрабатывает конфликт при запуске нескольких ботов
+
     print("🟢 Скрипт начал выполнение!")
 
     app = (
