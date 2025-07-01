@@ -1,118 +1,268 @@
-# ───────────── ИМПОРТЫ И НАСТРОЙКИ ─────────────
 import os
 import uuid
 import pytz
 import logging
 import datetime
 import asyncpg
+import aiohttp
+
 from dotenv import load_dotenv
-from telegram import Update, ChatInviteLink
+from telegram import Update, ChatInviteLink, User
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, ContextTypes,
-    JobQueue, ChatMemberHandler
+    JobQueue, ChatMemberHandler, MessageHandler, filters
 )
 from telegram.constants import ChatMemberStatus
 from telegram.error import BadRequest
 
 load_dotenv()
+
+# ====== Конфигурация ======
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 DATABASE_URL = os.getenv("DATABASE_URL")
+GOOGLE_SHEETS_WEBHOOK = os.getenv("GOOGLE_SHEETS_WEBHOOK")
 
-ADMIN_ID = 5744533263
-CHANNEL_ID = -1002673430364
 MOSCOW_TZ = pytz.timezone('Europe/Moscow')
+CHANNEL_ID = -1002673430364
 
-# Только эти юзернеймы могут получить доступ
+ADMINS = {
+    5744533263: "Главный куратор",
+    324109605: "Александр (@allexx34)",
+    8116299506: "Анна (@KuratorAutoAcademy) — Куратор АвтоАкадемии",
+    754549018: "Дмитрий Булатов (@dimabu5)"
+}
+
 approved_usernames = {
     "pankrat00", "milena_lifestyle1", "simonaee", "majjjya", "Alexart123",
     "nirta_66", "fekaloud", "nastyushkiiins", "anakrasln", "srgv_v",
     "ashkinarylit", "autoacadem10", "avirmary", "katei1"
 }
 
+# Логирование — максимальный уровень, формат с временем и уровнем
 logging.basicConfig(
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    level=logging.INFO
+    level=logging.DEBUG,
+    format='%(asctime)s - %(levelname)s - %(name)s - %(message)s'
 )
+logger = logging.getLogger(__name__)
 
-# ───────────── ПОДКЛЮЧЕНИЕ К БАЗЕ ─────────────
 async def get_db_pool():
-    return await asyncpg.create_pool(DATABASE_URL)
+    try:
+        logger.info("Подключаемся к базе данных...")
+        pool = await asyncpg.create_pool(DATABASE_URL)
+        logger.info("Подключение к базе установлено успешно.")
+        return pool
+    except Exception as e:
+        logger.critical(f"Ошибка подключения к базе данных: {e}", exc_info=True)
+        raise
 
-# ───────────── /START ─────────────
+async def main():
+    try:
+        logger.info("Запускаем приложение бота...")
+        app = ApplicationBuilder().token(BOT_TOKEN).build()
+
+        logger.debug("Инициализация пула соединений с БД...")
+        app.bot_data["db"] = await get_db_pool()
+
+        # Тут позже добавим регистрацию хендлеров
+
+        logger.info("Запуск бота...")
+        await app.start()
+        logger.info("Бот запущен, запускаем polling...")
+        await app.updater.start_polling()
+        await app.updater.idle()
+    except Exception as e:
+        logger.critical(f"Фатальная ошибка в main(): {e}", exc_info=True)
+        raise
+
+# Часть 2: Команда /start, отправка статистики в Google Sheets
+
+from telegram import ChatInviteLink
+
+async def send_to_google_sheets(user_id: int, username: str, first_name: str, start_date: str, end_date: str):
+    if not GOOGLE_SHEETS_WEBHOOK:
+        logger.warning("🚨 GOOGLE_SHEETS_WEBHOOK не задан, данные не отправляются")
+        return
+
+    data = {
+        "user_id": user_id,
+        "username": username,
+        "first_name": first_name,
+        "subscription_start": start_date,
+        "subscription_end": end_date
+    }
+
+    async with aiohttp.ClientSession() as session:
+        try:
+            async with session.post(GOOGLE_SHEETS_WEBHOOK, json=data) as resp:
+                if resp.status == 200:
+                    logger.info(f"✅ Данные пользователя @{username} отправлены в Google Sheets")
+                else:
+                    logger.error(f"❌ Ошибка отправки данных в Google Sheets: HTTP {resp.status}")
+        except Exception as e:
+            logger.error(f"❌ Ошибка при отправке данных в Google Sheets: {e}", exc_info=True)
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     username = user.username
     now = datetime.datetime.utcnow()
 
+    # Проверка username
     if not username:
-        await update.message.reply_text("У тебя не указан username. Добавь его в настройках Telegram.")
+        await update.message.reply_text(
+            "❗️ У тебя не указан username в Telegram. Добавь его в настройках профиля."
+        )
+        logger.info(f"Пользователь {user.id} без username попытался начать.")
         return
 
-    if username not in approved_usernames:
-        await update.message.reply_text("Ты не в списке учеников АвтоАкадемии. Доступ запрещён.")
+    # Проверка, является ли учеником
+    if username.lower() not in approved_usernames:
+        await update.message.reply_text(
+            "⛔️ Ты не в списке учеников АвтоАкадемии. Доступ запрещён.\n"
+            "Если произошла ошибка, свяжись со своим куратором."
+        )
+        logger.info(f"Пользователь @{username} не в списке учеников.")
         return
 
     async with context.application.bot_data["db"].acquire() as conn:
-        
-        # Проверка на уже активный токен
-        row = await conn.fetchrow("""
+        # Проверяем активную подписку
+        active = await conn.fetchrow("""
             SELECT * FROM tokens
             WHERE username = $1 AND used = TRUE AND subscription_ends > $2
             LIMIT 1
-        """, username, now)
+        """, username.lower(), now)
 
-        if row:
-            ends_msk = row["subscription_ends"].replace(tzinfo=pytz.utc).astimezone(MOSCOW_TZ)
+        if active:
+            ends_msk = active["subscription_ends"].replace(tzinfo=pytz.utc).astimezone(MOSCOW_TZ)
             await update.message.reply_text(
                 f"🔐 У тебя уже есть доступ до {ends_msk.strftime('%Y-%m-%d %H:%M:%S %Z')}.\n"
-                f"Если есть вопросы — обратись к администратору."
+                "Если есть вопросы — обратись к своему куратору."
             )
+            logger.info(f"Пользователь @{username} запросил /start, но доступ уже активен.")
             return
 
-        # Проверка, была ли уже ранее выдана ссылка (но истекла)
-        prev_token = await conn.fetchrow("""
+        # Проверяем, была ли уже выдана ссылка
+        old_token = await conn.fetchrow("""
             SELECT * FROM tokens
             WHERE username = $1
             LIMIT 1
-        """, username)
+        """, username.lower())
 
-        if prev_token:
-            await update.message.reply_text("⚠️ Ссылка уже была выдана ранее. Повторная выдача невозможна.\nОбратитесь к администратору.")
+        if old_token:
+            await update.message.reply_text(
+                "⚠️ Ссылка уже была выдана ранее. Повторная выдача невозможна.\n"
+                "Обратитесь к своему куратору для сброса."
+            )
+            logger.info(f"Пользователь @{username} запросил /start, но ссылка уже была выдана.")
             return
 
-        # Генерация новой ссылки и токена
+        # Генерируем уникальную ссылку
         token = uuid.uuid4().hex[:8]
-        expires = now + datetime.timedelta(hours=1)
-        subscription_ends = now + datetime.timedelta(minutes=10)
+        invite_expires = now + datetime.timedelta(minutes=60)
+        subscription_ends = now + datetime.timedelta(hours=1)
 
         try:
             invite: ChatInviteLink = await context.bot.create_chat_invite_link(
                 chat_id=CHANNEL_ID,
-                expire_date=expires,
+                expire_date=invite_expires,
                 member_limit=1
             )
         except Exception as e:
-            logging.error(f"Ошибка создания ссылки: {e}")
+            logger.error(f"Ошибка создания ссылки для @{username}: {e}", exc_info=True)
             await update.message.reply_text("Ошибка при создании ссылки. Попробуйте позже.")
             return
 
-        # Сохраняем в базу
+        # Сохраняем токен в базу
         await conn.execute("""
-            INSERT INTO tokens (token, username, user_id, invite_link, expires, subscription_ends, used)
-            VALUES ($1, $2, $3, $4, $5, $6, TRUE)
-        """, token, username, user.id, invite.invite_link, expires, subscription_ends)
+            INSERT INTO tokens (token, username, user_id, invite_link, expires, subscription_ends, used, joined)
+            VALUES ($1, $2, $3, $4, $5, $6, FALSE, FALSE)
+        """, token, username.lower(), user.id, invite.invite_link, invite_expires, subscription_ends)
 
         ends_msk = subscription_ends.replace(tzinfo=pytz.utc).astimezone(MOSCOW_TZ)
         await update.message.reply_text(
-            f"✅ Добро пожаловать, {user.first_name}!\n"
-            f"Ссылка для входа: {invite.invite_link}\n"
-            f"Подписка активна до: {ends_msk.strftime('%Y-%m-%d %H:%M:%S %Z')}"
+            f"Привет! Вот твоя уникальная ссылка для доступа в закрытый телеграм канал.\n"
+            f"Нажми на неё, чтобы подписаться.\n"
+            f"Срок действия ссылки — 1 час.\n\n"
+            f"🔗 Ссылка: {invite.invite_link}\n"
+            f"⏳ Подписка закончится: {ends_msk.strftime('%Y-%m-%d %H:%M:%S %Z')}\n\n"
+            f"Если есть вопросы — обратись к своему куратору."
         )
-        logging.info(f"Выдан доступ @{username} (ID: {user.id}) до {subscription_ends}")
+        logger.info(f"✅ Выдана ссылка @{username} (ID: {user.id}) до {subscription_ends}")
 
-# ───────────── АВТО-КИК И УДАЛЕНИЕ ЧУЖАКОВ ─────────────
+        # Отправляем данные в Google Sheets
+        await send_to_google_sheets(
+            user.id,
+            username.lower(),
+            user.first_name or "",
+            now.strftime("%Y-%m-%d %H:%M:%S"),
+            subscription_ends.strftime("%Y-%m-%d %H:%M:%S")
+        )
+
+# Часть 3: Обработка вступления, оповещения и автокик
+
+async def notify_kurators(context: ContextTypes.DEFAULT_TYPE, message: str):
+    for admin_id in ADMINS.keys():
+        try:
+            await context.bot.send_message(admin_id, message)
+            logger.debug(f"Отправлено уведомление куратору {ADMINS[admin_id]} (ID: {admin_id})")
+        except Exception as e:
+            logger.warning(f"Не удалось отправить уведомление куратору {admin_id}: {e}", exc_info=True)
+
+async def handle_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_member = update.my_chat_member
+    user = chat_member.new_chat_member.user
+    user_id = user.id
+    username = user.username or f"ID_{user_id}"
+    now = datetime.datetime.utcnow().replace(tzinfo=pytz.utc)
+
+    if user.is_bot:
+        logger.debug(f"Игнорируем бота @{username}")
+        return
+
+    async with context.application.bot_data["db"].acquire() as conn:
+        row = await conn.fetchrow("SELECT * FROM tokens WHERE user_id = $1 LIMIT 1", user_id)
+
+        if row:
+            subscription_ends = row["subscription_ends"].replace(tzinfo=pytz.utc)
+            used = row["used"]
+            joined = row.get("joined", False)
+
+            if subscription_ends < now:
+                msg = (
+                    f"⚠️ Пользователь @{username} (ID: {user_id}) вошёл в канал, "
+                    f"но подписка истекла {subscription_ends.astimezone(MOSCOW_TZ).strftime('%Y-%m-%d %H:%M:%S %Z')}.\n"
+                    "Проверьте и при необходимости удалите."
+                )
+                await notify_kurators(context, msg)
+                logger.info(f"Пользователь @{username} с истекшей подпиской вошёл в канал.")
+                return
+
+            if not joined:
+                await conn.execute("""
+                    UPDATE tokens SET used = TRUE, joined = TRUE, joined_at = $2 WHERE user_id = $1
+                """, user_id, now)
+
+                ends_msk = subscription_ends.astimezone(MOSCOW_TZ).strftime('%Y-%m-%d %H:%M:%S %Z')
+                try:
+                    await context.bot.send_message(
+                        user_id,
+                        f"🎉 Отлично! Ты успешно вступил в закрытый ТГ АвтоАкадемии.\n"
+                        f"⏳ Подписка закончится {ends_msk}.\n"
+                        "Приятного изучения!"
+                    )
+                    logger.info(f"Отправлено приветственное сообщение @{username}")
+                except Exception as e:
+                    logger.warning(f"Не удалось отправить вступительное сообщение @{username}: {e}", exc_info=True)
+        else:
+            if user_id not in ADMINS:
+                msg = (
+                    f"⚠️ В канал вступил неизвестный пользователь: @{username} (ID: {user_id}).\n"
+                    "Его нет в базе. Проверьте самостоятельно."
+                )
+                await notify_kurators(context, msg)
+                logger.info(f"Обнаружен чужак @{username} в канале.")
+
 async def kick_expired_members(context: ContextTypes.DEFAULT_TYPE):
-    logging.info("🔔 Запуск проверки истекших подписок")
+    logger.info("Запускаем проверку истекших подписок")
     now_utc = datetime.datetime.utcnow().replace(tzinfo=pytz.utc)
 
     async with context.application.bot_data["db"].acquire() as conn:
@@ -126,54 +276,61 @@ async def kick_expired_members(context: ContextTypes.DEFAULT_TYPE):
             username = row["username"]
             sub_ends = row["subscription_ends"].replace(tzinfo=pytz.utc)
 
-            # Проверяем, состоит ли в канале
             try:
                 member = await context.bot.get_chat_member(CHANNEL_ID, user_id)
                 is_in_chat = member.status in ['member', 'restricted']
             except BadRequest as e:
                 is_in_chat = False if "user not found" in str(e).lower() else True
 
-            # Предупреждение за минуту до истечения
             time_left = (sub_ends - now_utc).total_seconds()
-            if 0 < time_left <= 60 and is_in_chat:
-                try:
-                    await context.bot.send_message(user_id, "⚠️ Ваша подписка истекает через 1 минуту!")
-                    logging.info(f"📢 Предупреждение отправлено @{username}")
-                except Exception as e:
-                    logging.warning(f"⚠️ Не удалось уведомить @{username}: {e}")
 
-            # Кик по истечении
+            if 0 < time_left <= 600 and is_in_chat:
+                try:
+                    await context.bot.send_message(
+                        user_id,
+                        "⚠️ Завтра истекает срок действия твоей подписки."
+                    )
+                    logger.info(f"Предупреждение отправлено @{username}")
+                except Exception as e:
+                    logger.warning(f"Не удалось отправить предупреждение @{username}: {e}", exc_info=True)
+
             if time_left <= 0 and is_in_chat:
                 try:
                     await context.bot.ban_chat_member(CHANNEL_ID, user_id, until_date=int(now_utc.timestamp()) + 30)
                     await conn.execute("UPDATE tokens SET used = FALSE WHERE user_id = $1", user_id)
-                    logging.info(f"🚫 @{username} удалён по окончании подписки")
+                    logger.info(f"Пользователь @{username} удалён по окончании подписки")
+
+                    try:
+                        await context.bot.send_message(
+                            user_id,
+                            "Привет! Твоя подписка истекла. Благодарим, что был с нами.\nТвоя АвтоАкадемия :)"
+                        )
+                    except Exception as e:
+                        logger.warning(f"Не удалось отправить сообщение после кика @{username}: {e}", exc_info=True)
+
                 except Exception as e:
-                    logging.error(f"❌ Ошибка кика @{username}: {e}")
+                    logger.error(f"Ошибка кика @{username}: {e}", exc_info=True)
 
-        # ───────────── УДАЛЕНИЕ ЧУЖАКОВ ─────────────
-        logging.info("🔍 Проверка на нелегальных участников")
-
+        logger.info("Проверка на нелегальных участников")
         try:
             admins = await context.bot.get_chat_administrators(CHANNEL_ID)
             admin_ids = {admin.user.id for admin in admins}
         except Exception as e:
-            logging.error(f"❌ Не удалось получить список админов: {e}")
+            logger.error(f"Не удалось получить список админов: {e}", exc_info=True)
             return
 
-        EXCEPTION_IDS = {ADMIN_ID}
+        EXCEPTION_IDS = set(ADMINS.keys())
         EXCEPTIONS = admin_ids.union(EXCEPTION_IDS)
 
-        # Все, у кого подписка ещё активна
-                # Все, у кого подписка ещё активна
         allowed_ids = {row["user_id"] for row in await conn.fetch("""
             SELECT user_id FROM tokens
             WHERE used = TRUE AND subscription_ends > $1 AND user_id IS NOT NULL
         """, now_utc)}
 
         all_known = await conn.fetch("SELECT user_id FROM tokens WHERE user_id IS NOT NULL")
-        for row in all_known:
-            user_id = row["user_id"]
+        known_ids = {row["user_id"] for row in all_known}
+
+        for user_id in known_ids:
             if user_id in allowed_ids or user_id in EXCEPTIONS:
                 continue
 
@@ -181,48 +338,21 @@ async def kick_expired_members(context: ContextTypes.DEFAULT_TYPE):
                 member = await context.bot.get_chat_member(CHANNEL_ID, user_id)
                 if member.status in ['member', 'restricted']:
                     username = member.user.username or f"ID_{user_id}"
-                    logging.info(f"👀 Обнаружен чужак @{username} (ID: {user_id})")
-                    await context.bot.send_message(
-                        ADMIN_ID,
-                        f"⚠️ В канал вступил неизвестный пользователь: @{username} (ID: {user_id}) — он не найден в базе данных.\n"
-                        f"Сам решай, кикать или оставить."
+                    logger.info(f"Обнаружен чужак @{username} (ID: {user_id})")
+
+                    msg = (
+                        f"⚠️ В канал вступил неизвестный пользователь: @{username} (ID: {user_id}).\n"
+                        "Его нет в активных подписках. Проверьте и при необходимости удалите."
                     )
+                    await notify_kurators(context, msg)
             except Exception as e:
-                logging.warning(f"⚠️ Не удалось обработать участника ID {user_id}: {e}")
+                logger.warning(f"Не удалось обработать участника ID {user_id}: {e}", exc_info=True)
 
-# ───────────── ОБРАБОТКА ВСТУПЛЕНИЯ В КАНАЛ ─────────────
-async def handle_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_member = update.my_chat_member
-    user = chat_member.new_chat_member.user
+# Часть 4: Управление ссылками, добавление учеников, статистика
 
-    if chat_member.new_chat_member.status == ChatMemberStatus.MEMBER:
-        user_id = user.id
-        username = user.username or f"ID_{user_id}"
-
-        async with context.application.bot_data["db"].acquire() as conn:
-            row = await conn.fetchrow(
-                "SELECT * FROM tokens WHERE user_id = $1 AND used = TRUE", user_id
-            )
-
-            # Чужак — бан
-            if not row and user_id not in {ADMIN_ID}:
-                try:
-                    await context.bot.send_message(
-                        ADMIN_ID,
-                        f"⚠️ В канал вступил неизвестный пользователь: @{username} (ID: {user_id})"
-                    )
-                except Exception as e:
-                    logging.error(f"❌ Не удалось уведомить админа: {e}")
-
-                try:
-                    await context.bot.ban_chat_member(CHANNEL_ID, user_id, until_date=int(datetime.datetime.utcnow().timestamp()) + 30)
-                    logging.info(f"🛑 Кикнут чужак @{username}")
-                except Exception as e:
-                    logging.error(f"❌ Не удалось кикнуть @{username}: {e}")
-
-# ───────────── /SENDLINK ─────────────
 async def sendlink(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
+    user = update.effective_user
+    if user.id not in ADMINS:
         await update.message.reply_text("⛔️ Доступ запрещён.")
         return
 
@@ -230,34 +360,96 @@ async def sendlink(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Используй: /sendlink @username")
         return
 
-    username = context.args[0].lstrip("@")
+    username = context.args[0].lstrip("@").lower()
 
+    if username not in approved_usernames:
+        await update.message.reply_text("❌ Пользователь не найден в списке учеников.")
+        return
+
+    now = datetime.datetime.utcnow()
     async with context.application.bot_data["db"].acquire() as conn:
-        if username not in approved_usernames:
-            await update.message.reply_text("❌ Пользователь не найден в списке учеников.")
-            return
+        existing = await conn.fetchrow("""
+            SELECT user_id FROM tokens
+            WHERE username = $1 AND used = TRUE AND user_id IS NOT NULL
+        """, username)
 
-        # Получаем старую ссылку
-        old = await conn.fetchrow("SELECT invite_link FROM tokens WHERE username = $1 LIMIT 1", username)
-        if old and old["invite_link"]:
+        if existing:
             try:
-                await context.bot.revoke_chat_invite_link(CHANNEL_ID, old["invite_link"])
-                logging.info(f"🔒 Старая ссылка @{username} деактивирована.")
+                member = await context.bot.get_chat_member(CHANNEL_ID, existing["user_id"])
+                if member.status in ["member", "restricted"]:
+                    await update.message.reply_text(
+                        "⚠️ Ссылка ранее уже была использована. Убедись, что левак покинул канал."
+                    )
+                    logger.warning(f"Попытка повторной выдачи, но кто-то уже в канале под @{username}")
+                    return
             except Exception as e:
-                logging.warning(f"⚠️ Не удалось деактивировать старую ссылку @{username}: {e}")
+                logger.warning(f"Не удалось проверить участника {existing['user_id']}: {e}", exc_info=True)
 
-        # Удаляем все токены этого пользователя
+        old_links = await conn.fetch("SELECT invite_link FROM tokens WHERE username = $1", username)
+        for link_rec in old_links:
+            link = link_rec["invite_link"]
+            if link:
+                try:
+                    await context.bot.revoke_chat_invite_link(CHANNEL_ID, link)
+                    logger.info(f"Старая ссылка @{username} деактивирована.")
+                except Exception as e:
+                    logger.warning(f"Не удалось деактивировать старую ссылку @{username}: {e}", exc_info=True)
+
         await conn.execute("DELETE FROM tokens WHERE username = $1", username)
 
-        await update.message.reply_text(
-            f"♻️ Все ссылки для @{username} сброшены.\n"
-            f"Попроси ввести /start заново."
-        )
-        logging.info(f"🔄 Сброшены все данные по @{username}")
+        token = uuid.uuid4().hex[:8]
+        invite_expires = now + datetime.timedelta(minutes=30)
+        subscription_ends = now + datetime.timedelta(hours=1)
 
-# ───────────── /STATS ─────────────
+        try:
+            invite: ChatInviteLink = await context.bot.create_chat_invite_link(
+                chat_id=CHANNEL_ID,
+                expire_date=invite_expires,
+                member_limit=1
+            )
+        except Exception as e:
+            logger.error(f"Ошибка создания ссылки для @{username}: {e}", exc_info=True)
+            await update.message.reply_text("Ошибка при создании ссылки. Попробуйте позже.")
+            return
+
+        await conn.execute("""
+            INSERT INTO tokens (token, username, user_id, invite_link, expires, subscription_ends, used)
+            VALUES ($1, $2, NULL, $3, $4, $5, FALSE)
+        """, token, username, invite.invite_link, invite_expires, subscription_ends)
+
+        ends_msk = subscription_ends.replace(tzinfo=pytz.utc).astimezone(MOSCOW_TZ)
+        expires_msk = invite_expires.replace(tzinfo=pytz.utc).astimezone(MOSCOW_TZ)
+
+        await update.message.reply_text(
+            f"♻️ Ссылка для @{username} обновлена и сброшены все предыдущие данные.\n"
+            f"Срок действия ссылки: {expires_msk.strftime('%Y-%m-%d %H:%M:%S %Z')}\n"
+            f"Подписка действует до: {ends_msk.strftime('%Y-%m-%d %H:%M:%S %Z')}\n"
+            f"Попроси ученика ввести /start и использовать ссылку."
+        )
+        logger.info(f"Выдана новая ссылка @{username} до {subscription_ends}")
+
+async def add_student(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id not in ADMINS:
+        await update.message.reply_text("⛔️ Доступ запрещён.")
+        return
+
+    if len(context.args) < 1:
+        await update.message.reply_text("Используй: /addstudent @username")
+        return
+
+    username = context.args[0].lstrip("@").lower()
+
+    if username in approved_usernames:
+        await update.message.reply_text(f"Пользователь @{username} уже в списке учеников.")
+        return
+
+    approved_usernames.add(username)
+
+    await update.message.reply_text(f"✅ Пользователь @{username} добавлен в список учеников.\nОн сможет получить доступ через /start.")
+    logger.info(f"Пользователь @{username} добавлен администратором {update.effective_user.id}")
+
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
+    if update.effective_user.id not in ADMINS:
         await update.message.reply_text("⛔️ Доступ запрещён.")
         return
 
@@ -265,60 +457,51 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         total = await conn.fetchval("SELECT COUNT(*) FROM tokens")
         used = await conn.fetchval("SELECT COUNT(*) FROM tokens WHERE used = TRUE")
         unused = await conn.fetchval("SELECT COUNT(*) FROM tokens WHERE used = FALSE")
+        active = await conn.fetchval("SELECT COUNT(*) FROM tokens WHERE used = TRUE AND subscription_ends > now()")
+        expired = await conn.fetchval("SELECT COUNT(*) FROM tokens WHERE used = TRUE AND subscription_ends <= now()")
 
         await update.message.reply_text(
-            f"📊 Всего токенов: {total}\n"
-            f"✅ Использованных: {used}\n"
-            f"🕸 Неиспользованных: {unused}"
+            f"📊 Статистика токенов:\n"
+            f"• Всего: {total}\n"
+            f"• ✅ Использованных: {used}\n"
+            f"• 🕸 Неиспользованных: {unused}\n"
+            f"• 🟢 Активных: {active}\n"
+            f"• 🔴 Истекших: {expired}"
         )
 
-# ───────────── СТАРТ ПРИЛОЖЕНИЯ ─────────────
-async def on_startup(app):
-    try:
-        await app.bot.delete_webhook(drop_pending_updates=True)
-        logging.info("🚀 Бот запущен.")
+import asyncio
 
-        pool = await get_db_pool()
-        app.bot_data["db"] = pool
-        logging.info("✅ Подключение к базе данных установлено")
+async def main():
+    # Создаём приложение бота
+    application = ApplicationBuilder().token(BOT_TOKEN).build()
 
-        app.job_queue.run_repeating(kick_expired_members, interval=300, first=10)
-        logging.info("⏳ Запущена проверка подписок (каждые 5 минут)")
-    except Exception as e:
-        logging.error(f"❌ Ошибка запуска: {e}")
-        raise
+    # Инициализация пула БД и сохранение в bot_data для доступа из хендлеров
+    db_pool = await get_db_pool()
+    application.bot_data["db"] = db_pool
 
-# ───────────── ДОПОЛНИТЕЛЬНЫЕ КОМАНДЫ ─────────────
-async def test(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("✅ Бот работает!")
+    # Регистрируем хендлеры команд
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("sendlink", sendlink))
+    application.add_handler(CommandHandler("addstudent", add_student))
+    application.add_handler(CommandHandler("stats", stats))
 
-async def force_kick(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await kick_expired_members(context)
-    await update.message.reply_text("✅ Автокик запущен вручную")
+    # Хендлер на изменение статуса чата (вступление/выход)
+    application.add_handler(ChatMemberHandler(handle_chat_member, ChatMemberHandler.MY_CHAT_MEMBER))
 
-# ───────────── MAIN ─────────────
+    # Планировщик — автокик по расписанию, например, раз в 5 минут
+    job_queue: JobQueue = application.job_queue
+    job_queue.run_repeating(kick_expired_members, interval=300, first=10)
+
+    logger.info("Бот запущен!")
+
+    # Запуск бота (async)
+    await application.run_polling()
+
+    # Закрываем соединение с БД при остановке бота
+    await db_pool.close()
+
 if __name__ == "__main__":
-    print("🟢 Скрипт начал выполнение!")
-
-    app = (
-        ApplicationBuilder()
-        .token(BOT_TOKEN)
-        .job_queue(JobQueue())
-        .build()
-    )
-
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("stats", stats))
-    app.add_handler(CommandHandler("sendlink", sendlink))
-    app.add_handler(CommandHandler("test", test))
-    app.add_handler(CommandHandler("force_kick", force_kick))
-    app.add_handler(ChatMemberHandler(handle_chat_member, chat_member_types=ChatMemberHandler.MY_CHAT_MEMBER))
-
-    app.post_init = on_startup
-
-    app.run_polling(
-        close_loop=False,
-        stop_signals=None,
-        allowed_updates=Update.ALL_TYPES,
-        drop_pending_updates=True
-    )
+    try:
+        asyncio.run(main())
+    except (KeyboardInterrupt, SystemExit):
+        logger.info("Бот остановлен вручную.")
