@@ -240,7 +240,7 @@ async def sendlink(update: Update, context: ContextTypes.DEFAULT_TYPE):
         row = await conn.fetchrow("""
             SELECT user_id FROM tokens 
             WHERE username = $1 AND user_id IS NOT NULL AND user_id != 0
-            ORDER BY created_at DESC LIMIT 1
+            ORDER BY id DESC LIMIT 1
         """, username)
 
         user_id = row["user_id"] if row else None
