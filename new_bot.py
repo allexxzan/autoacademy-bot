@@ -26,7 +26,7 @@ MOSCOW_TZ = pytz.timezone('Europe/Moscow')
 approved_usernames = {
     "pankrat00", "milena_lifestyle1", "simonaee", "majjjya", "Alexart123",
     "nirta_66", "fekaloud", "nastyushkiiins", "anakrasln", "srgv_v",
-    "ashkinarylit", "autoacadem10", "avirmary", "katei1", "artchis01"
+    "ashkinarylit", "autoacadem10", "avirmary", "katei1"
 }
 
 logging.basicConfig(
@@ -53,6 +53,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     async with context.application.bot_data["db"].acquire() as conn:
+        
         # Проверка на уже активный токен
         row = await conn.fetchrow("""
             SELECT * FROM tokens
@@ -164,25 +165,28 @@ async def kick_expired_members(context: ContextTypes.DEFAULT_TYPE):
         EXCEPTIONS = admin_ids.union(EXCEPTION_IDS)
 
         # Все, у кого подписка ещё активна
-        known_users = await conn.fetch("""
+                # Все, у кого подписка ещё активна
+        allowed_ids = {row["user_id"] for row in await conn.fetch("""
             SELECT user_id FROM tokens
             WHERE used = TRUE AND subscription_ends > $1 AND user_id IS NOT NULL
-        """, now_utc)
-        known_ids = {row['user_id'] for row in known_users}
-        allowed_ids = known_ids.union(EXCEPTIONS)
+        """, now_utc)}
 
         all_known = await conn.fetch("SELECT user_id FROM tokens WHERE user_id IS NOT NULL")
         for row in all_known:
             user_id = row["user_id"]
-            if user_id in allowed_ids:
+            if user_id in allowed_ids or user_id in EXCEPTIONS:
                 continue
 
             try:
                 member = await context.bot.get_chat_member(CHANNEL_ID, user_id)
                 if member.status in ['member', 'restricted']:
-                    await context.bot.ban_chat_member(CHANNEL_ID, user_id, until_date=int(now_utc.timestamp()) + 30)
-                    logging.info(f"🛑 Удалён чужак ID {user_id}")
-                    await context.bot.send_message(ADMIN_ID, f"⚠️ В канал вступил и был удалён неизвестный ID: {user_id}")
+                    username = member.user.username or f"ID_{user_id}"
+                    logging.info(f"👀 Обнаружен чужак @{username} (ID: {user_id})")
+                    await context.bot.send_message(
+                        ADMIN_ID,
+                        f"⚠️ В канал вступил неизвестный пользователь: @{username} (ID: {user_id}) — он не найден в базе данных.\n"
+                        f"Сам решай, кикать или оставить."
+                    )
             except Exception as e:
                 logging.warning(f"⚠️ Не удалось обработать участника ID {user_id}: {e}")
 
@@ -233,11 +237,23 @@ async def sendlink(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ Пользователь не найден в списке учеников.")
             return
 
-        # Удаляем предыдущие записи, чтобы человек снова получил ссылку через /start
+        # Получаем старую ссылку
+        old = await conn.fetchrow("SELECT invite_link FROM tokens WHERE username = $1 LIMIT 1", username)
+        if old and old["invite_link"]:
+            try:
+                await context.bot.revoke_chat_invite_link(CHANNEL_ID, old["invite_link"])
+                logging.info(f"🔒 Старая ссылка @{username} деактивирована.")
+            except Exception as e:
+                logging.warning(f"⚠️ Не удалось деактивировать старую ссылку @{username}: {e}")
+
+        # Удаляем все токены этого пользователя
         await conn.execute("DELETE FROM tokens WHERE username = $1", username)
-        await update.message.reply_text(f"♻️ Предыдущая ссылка сброшена для @{username}.\n"
-                                        f"Попроси его снова ввести /start в боте.")
-        logging.info(f"🔄 Сброшена ссылка для @{username}")
+
+        await update.message.reply_text(
+            f"♻️ Все ссылки для @{username} сброшены.\n"
+            f"Попроси ввести /start заново."
+        )
+        logging.info(f"🔄 Сброшены все данные по @{username}")
 
 # ───────────── /STATS ─────────────
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
