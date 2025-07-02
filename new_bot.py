@@ -488,7 +488,6 @@ async def main():
     await db_pool.close()
 
 if __name__ == "__main__":
-    import asyncio
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:
@@ -497,7 +496,7 @@ if __name__ == "__main__":
     if loop and loop.is_running():
         print("⚠️ Event loop уже работает, запускаем main как задачу")
         loop.create_task(main())
-        loop.run_forever()
+        loop.run_forever()  # держим луп живым
     else:
         print("🚀 Запускаем через asyncio.run()")
         asyncio.run(main())
