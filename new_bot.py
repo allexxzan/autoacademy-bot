@@ -459,14 +459,11 @@ async def main():
     # Создаём приложение
     application = ApplicationBuilder().token(BOT_TOKEN).build()
 
-    # === Инициализируем бота ===
-    await application.initialize()
-
     # === Подключение к базе данных ===
     db_pool = await get_db_pool()
     application.bot_data["db"] = db_pool
 
-    # Загружаем список учеников из базы
+    # Загружаем список учеников
     async with db_pool.acquire() as conn:
         rows = await conn.fetch("SELECT username FROM students")
         approved = {row["username"].lower() for row in rows}
@@ -484,13 +481,8 @@ async def main():
     job_queue: JobQueue = application.job_queue
     job_queue.run_repeating(kick_expired_members, interval=300, first=10)
 
-    # === Запуск бота ===
     logger.info("🚀 Бот запущен!")
-    await application.start()
-    await application.updater.start_polling()
-    await application.updater.wait_until_closed()
-    await application.stop()
-    await application.shutdown()
+    await application.run_polling()  # вот это всё, что нужно!
 
     # === Закрываем БД при остановке ===
     await db_pool.close()
