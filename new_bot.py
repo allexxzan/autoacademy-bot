@@ -489,15 +489,4 @@ async def main():
 
 if __name__ == "__main__":
     import asyncio
-
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        loop = None
-
-    if loop and loop.is_running():
-        print("⚠️ Event loop уже работает, запускаем как task...")
-        asyncio.get_event_loop().create_task(main())
-    else:
-        print("🚀 Запускаем через asyncio.run()")
-        asyncio.run(main())
+    asyncio.run(main())
