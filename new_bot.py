@@ -32,12 +32,6 @@ ADMINS = {
     754549018: "Дмитрий Булатов (@dimabu5)"
 }
 
-approved_usernames = {
-    "pankrat00", "milena_lifestyle1", "simonaee", "majjjya", "Alexart123",
-    "nirta_66", "fekaloud", "nastyushkiiins", "anakrasln", "srgv_v",
-    "ashkinarylit", "autoacadem10", "avirmary", "katei1"
-}
-
 # Логирование — максимальный уровень, формат с временем и уровнем
 logging.basicConfig(
     level=logging.DEBUG,
@@ -55,29 +49,7 @@ async def get_db_pool():
         logger.critical(f"Ошибка подключения к базе данных: {e}", exc_info=True)
         raise
 
-async def main():
-    try:
-        logger.info("Запускаем приложение бота...")
-        app = ApplicationBuilder().token(BOT_TOKEN).build()
-
-        logger.debug("Инициализация пула соединений с БД...")
-        app.bot_data["db"] = await get_db_pool()
-
-        # Тут позже добавим регистрацию хендлеров
-
-        logger.info("Запуск бота...")
-        await app.start()
-        logger.info("Бот запущен, запускаем polling...")
-        await app.updater.start_polling()
-        await app.updater.idle()
-    except Exception as e:
-        logger.critical(f"Фатальная ошибка в main(): {e}", exc_info=True)
-        raise
-
 # Часть 2: Команда /start, отправка статистики в Google Sheets
-
-from telegram import ChatInviteLink
-
 async def send_to_google_sheets(user_id: int, username: str, first_name: str, start_date: str, end_date: str):
     if not GOOGLE_SHEETS_WEBHOOK:
         logger.warning("🚨 GOOGLE_SHEETS_WEBHOOK не задан, данные не отправляются")
@@ -115,7 +87,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # Проверка, является ли учеником
-    if username.lower() not in approved_usernames:
+    if username.lower() not in context.application.bot_data.get("approved_usernames", set()):
         await update.message.reply_text(
             "⛔️ Ты не в списке учеников АвтоАкадемии. Доступ запрещён.\n"
             "Если произошла ошибка, свяжись со своим куратором."
@@ -362,7 +334,7 @@ async def sendlink(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     username = context.args[0].lstrip("@").lower()
 
-    if username not in approved_usernames:
+    if username.lower() not in context.application.bot_data.get("approved_usernames", set()):
         await update.message.reply_text("❌ Пользователь не найден в списке учеников.")
         return
 
@@ -439,13 +411,20 @@ async def add_student(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     username = context.args[0].lstrip("@").lower()
 
-    if username in approved_usernames:
+    if username.lower() in context.application.bot_data.get("approved_usernames", set()):
         await update.message.reply_text(f"Пользователь @{username} уже в списке учеников.")
         return
 
-    approved_usernames.add(username)
+    # Добавление
+    async with context.application.bot_data["db"].acquire() as conn:
+        await conn.execute("INSERT INTO students (username) VALUES ($1)", username.lower())
 
-    await update.message.reply_text(f"✅ Пользователь @{username} добавлен в список учеников.\nОн сможет получить доступ через /start.")
+    # Обновляем список в bot_data
+    context.application.bot_data["approved_usernames"].add(username.lower())
+
+    await update.message.reply_text(
+        f"✅ Пользователь @{username} добавлен в список учеников.\nОн сможет получить доступ через /start."
+    )
     logger.info(f"Пользователь @{username} добавлен администратором {update.effective_user.id}")
 
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -479,6 +458,14 @@ async def main():
     db_pool = await get_db_pool()
     application.bot_data["db"] = db_pool
 
+    # Загружаем список учеников из базы
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch("SELECT username FROM students")
+        approved = {row["username"].lower() for row in rows}
+        application.bot_data["approved_usernames"] = approved
+        logger.info(f"✅ Загружено учеников: {len(approved)}")
+
+
     # Регистрируем хендлеры команд
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("sendlink", sendlink))
@@ -501,7 +488,16 @@ async def main():
     await db_pool.close()
 
 if __name__ == "__main__":
+    import asyncio
+
     try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+
+    if loop and loop.is_running():
+        print("⚠️ Event loop уже работает, запускаем как task...")
+        asyncio.get_event_loop().create_task(main())
+    else:
+        print("🚀 Запускаем через asyncio.run()")
         asyncio.run(main())
-    except (KeyboardInterrupt, SystemExit):
-        logger.info("Бот остановлен вручную.")
