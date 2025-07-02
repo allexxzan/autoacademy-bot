@@ -449,12 +449,20 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 import asyncio
+import logging
+
+from telegram.ext import ApplicationBuilder
+
+logger = logging.getLogger(__name__)
 
 async def main():
-    # Создаём приложение бота
+    # Создаём приложение
     application = ApplicationBuilder().token(BOT_TOKEN).build()
 
-    # Инициализация пула БД и сохранение в bot_data для доступа из хендлеров
+    # === Инициализируем бота ===
+    await application.initialize()
+
+    # === Подключение к базе данных ===
     db_pool = await get_db_pool()
     application.bot_data["db"] = db_pool
 
@@ -465,26 +473,26 @@ async def main():
         application.bot_data["approved_usernames"] = approved
         logger.info(f"✅ Загружено учеников: {len(approved)}")
 
-
-    # Регистрируем хендлеры команд
+    # === Регистрируем хендлеры ===
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("sendlink", sendlink))
     application.add_handler(CommandHandler("addstudent", add_student))
     application.add_handler(CommandHandler("stats", stats))
-
-    # Хендлер на изменение статуса чата (вступление/выход)
     application.add_handler(ChatMemberHandler(handle_chat_member, ChatMemberHandler.MY_CHAT_MEMBER))
 
-    # Планировщик — автокик по расписанию, например, раз в 5 минут
+    # === Планировщик ===
     job_queue: JobQueue = application.job_queue
     job_queue.run_repeating(kick_expired_members, interval=300, first=10)
 
-    logger.info("Бот запущен!")
+    # === Запуск бота ===
+    logger.info("🚀 Бот запущен!")
+    await application.start()
+    await application.updater.start_polling()
+    await application.updater.wait_until_closed()
+    await application.stop()
+    await application.shutdown()
 
-    # Запуск бота (async)
-    await application.run_polling()
-
-    # Закрываем соединение с БД при остановке бота
+    # === Закрываем БД при остановке ===
     await db_pool.close()
 
 if __name__ == "__main__":
@@ -494,9 +502,8 @@ if __name__ == "__main__":
         loop = None
 
     if loop and loop.is_running():
-        print("⚠️ Event loop уже работает, запускаем main как задачу")
+        print("⚠️ Event loop уже работает, запускаем как задачу...")
         loop.create_task(main())
-        loop.run_forever()  # держим луп живым
     else:
         print("🚀 Запускаем через asyncio.run()")
         asyncio.run(main())
