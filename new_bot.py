@@ -487,15 +487,14 @@ async def main():
     # === Закрываем БД при остановке ===
     await db_pool.close()
 
-if __name__ == "__main__":
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        loop = None
+if name == "__main__":
+    import asyncio
 
-    if loop and loop.is_running():
-        print("⚠️ Event loop уже работает, запускаем как задачу...")
-        loop.create_task(main())
-    else:
-        print("🚀 Запускаем через asyncio.run()")
+    try:
         asyncio.run(main())
+    except RuntimeError as e:
+        if str(e).startswith("This event loop is already running"):
+            loop = asyncio.get_event_loop()
+            loop.run_until_complete(main())
+        else:
+            raise
