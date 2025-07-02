@@ -487,5 +487,5 @@ async def main():
     await application.shutdown()
     await db_pool.close()
 
-if name == "__main__":
+if __name__ == "__main__":
     asyncio.run(main())
