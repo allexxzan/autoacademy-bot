@@ -399,6 +399,8 @@ async def sendlink(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"Попроси ученика ввести /start и использовать ссылку."
         )
         logger.info(f"Выдана новая ссылка @{username} до {subscription_ends}")
+        
+        context.application.bot_data["approved_usernames"].add(username.lower())
 
 async def add_student(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in ADMINS:
