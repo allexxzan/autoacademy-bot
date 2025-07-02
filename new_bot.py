@@ -113,18 +113,18 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         # Проверяем, была ли уже выдана ссылка
-        old_token = await conn.fetchrow("""
+        existing_token = await conn.fetchrow("""
             SELECT * FROM tokens
-            WHERE username = $1
+            WHERE username = $1 AND used = TRUE
             LIMIT 1
         """, username.lower())
 
-        if old_token:
+        if existing_token:
             await update.message.reply_text(
                 "⚠️ Ссылка уже была выдана ранее. Повторная выдача невозможна.\n"
                 "Обратитесь к своему куратору для сброса."
             )
-            logger.info(f"Пользователь @{username} запросил /start, но ссылка уже была выдана.")
+            logger.info(f"Пользователь @{username} запросил /start, но уже есть использованная ссылка.")
             return
 
         # Генерируем уникальную ссылку
