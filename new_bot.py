@@ -487,7 +487,7 @@ async def main():
     # === Закрываем БД при остановке ===
     await db_pool.close()
 
-if name == "__main__":
+if __name__ == "__main__":
     import asyncio
 
     try:
