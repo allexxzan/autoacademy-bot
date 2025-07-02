@@ -488,4 +488,11 @@ async def main():
     await db_pool.close()
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    import asyncio
+
+    async def runner():
+        await main()  # main() внутри вызывает application.run_polling()
+
+    loop = asyncio.get_event_loop()
+    loop.create_task(runner())
+    loop.run_forever()
