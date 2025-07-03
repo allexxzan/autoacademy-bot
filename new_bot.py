@@ -544,8 +544,7 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     logger.info(f"Отправлена статистика пользователю {update.effective_user.id}")
 
-# ====== Главная точка входа — запуск бота ======
-
+# ====== Главная точка входа — запуск бота вручную без run_polling ======
 async def main():
     application = ApplicationBuilder().token(BOT_TOKEN).build()
 
@@ -569,17 +568,14 @@ async def main():
 
     logger.info("🚀 Бот запущен!")
 
-    try:
-        await application.run_polling()
-    finally:
-        logger.info("Завершаем работу бота, закрываем соединение с БД...")
-        await db_pool.close()
-        logger.info("Бот успешно остановлен.")
+    # ===== 🧠 Ручной запуск =====
+    await application.initialize()
+    await application.start()
+    await application.updater.start_polling()  # не run_polling()
 
-# Точка входа для запуска из консоли
 if __name__ == "__main__":
     import asyncio
 
-    loop = asyncio.new_event_loop()
+    loop = asyncio.get_event_loop()
     loop.create_task(main())
     loop.run_forever()
