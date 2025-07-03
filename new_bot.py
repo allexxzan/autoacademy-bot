@@ -459,14 +459,9 @@ async def main():
 
     logger.info("🚀 Бот запущен!")
 
-    await application.initialize()
-    await application.start()
-    await application.updater.start_polling()
-    await application.updater.idle()
+    await application.run_polling()  # ЗАМЕНИЛИ ВСЁ НА ЭТУ СТРОКУ
 
     logger.info("Завершение работы бота, закрываем соединение с БД...")
-    await application.stop()
-    await application.shutdown()
     await db_pool.close()
     logger.info("Бот успешно остановлен.")
 
