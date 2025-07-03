@@ -105,26 +105,61 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """, username.lower())
 
     if existing_token:
+        invite_expires = existing_token["expires"].replace(tzinfo=pytz.utc)
+        ends_at = existing_token["subscription_ends"].replace(tzinfo=pytz.utc)
+
         if existing_token["used"]:
             await update.message.reply_text(
                 "⚠️ Ссылка уже была использована. Повторная выдача невозможна.\n"
                 "Обратитесь к своему куратору для сброса."
             )
-            logger.info(f"Пользователь @{username} уже использовал токен.")
             return
-        else:
-            # Ссылка активна, ждём захода в канал
-            invite_expires = existing_token["expires"]
-            ends_at = existing_token["subscription_ends"]
-            ends_msk = ends_at.replace(tzinfo=pytz.utc).astimezone(MOSCOW_TZ)
+
+        now_utc = datetime.datetime.utcnow().replace(tzinfo=pytz.utc)
+
+        if invite_expires < now_utc:
+            # Ссылка просрочена — удаляем и выдаём новую
+            await conn.execute("DELETE FROM tokens WHERE username = $1", username.lower())
+
+            try:
+                new_invite: ChatInviteLink = await context.bot.create_chat_invite_link(
+                    chat_id=CHANNEL_ID,
+                    expire_date=now_utc + datetime.timedelta(minutes=30),
+                    member_limit=1
+                )
+            except Exception as e:
+                logger.error(f"Не удалось создать новую ссылку для @{username}: {e}", exc_info=True)
+                await update.message.reply_text("⚠️ Ошибка при создании новой ссылки. Обратись к куратору.")
+                return
+
+            new_expires = now_utc + datetime.timedelta(minutes=30)
+            new_ends = now_utc + datetime.timedelta(hours=1)
+
+            await conn.execute("""
+                INSERT INTO tokens (token, username, user_id, invite_link, expires, subscription_ends, used)
+                VALUES ($1, $2, NULL, $3, $4, $5, FALSE)
+            """, uuid.uuid4().hex[:8], username.lower(), new_invite.invite_link, new_expires, new_ends)
+
+            expires_msk = new_expires.astimezone(MOSCOW_TZ).strftime('%Y-%m-%d %H:%M:%S %Z')
+            ends_msk = new_ends.astimezone(MOSCOW_TZ).strftime('%Y-%m-%d %H:%M:%S %Z')
+
             await update.message.reply_text(
-                f"⚠️ Ссылка уже была сгенерирована, но ещё не использована.\n"
-                f"🔗 Срок действия: до {invite_expires.replace(tzinfo=pytz.utc).astimezone(MOSCOW_TZ).strftime('%Y-%m-%d %H:%M:%S %Z')}\n"
-                f"⏳ Подписка закончится: {ends_msk.strftime('%Y-%m-%d %H:%M:%S %Z')}\n"
-                f"Проверь ссылку и используй её. Если не работает — обратись к куратору."
+                f"♻️ Прошлая ссылка была просрочена. Сгенерирована новая:\n"
+                f"🔗 Срок действия: до {expires_msk}\n"
+                f"⏳ Подписка закончится: {ends_msk}\n"
+                f"Проверь и используй новую ссылку."
             )
-            logger.info(f"Пользователь @{username} пытался повторно, но ссылка ещё активна.")
             return
+
+        # Если ссылка ещё валидна и не использована
+        await update.message.reply_text(
+            f"⚠️ Ссылка уже была сгенерирована, но ещё не использована.\n"
+            f"🔗 Срок действия: до {invite_expires.astimezone(MOSCOW_TZ).strftime('%Y-%m-%d %H:%M:%S %Z')}\n"
+            f"⏳ Подписка закончится: {ends_at.astimezone(MOSCOW_TZ).strftime('%Y-%m-%d %H:%M:%S %Z')}\n"
+            f"Проверь ссылку и используй её. Если не работает — обратись к куратору."
+        )
+        return
+  
 
 # Часть 3: Обработка вступления, оповещения и автокик
 
