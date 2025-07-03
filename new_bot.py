@@ -459,18 +459,17 @@ async def main():
 
     logger.info("🚀 Бот запущен!")
 
-    await application.run_polling()  # ЗАМЕНИЛИ ВСЁ НА ЭТУ СТРОКУ
+    await application.initialize()
+    await application.start()
+    await application.updater.start_polling()
+    await application.updater.idle()
 
     logger.info("Завершение работы бота, закрываем соединение с БД...")
+    await application.stop()
+    await application.shutdown()
     await db_pool.close()
     logger.info("Бот успешно остановлен.")
 
 if __name__ == "__main__":
     import asyncio
-
-    async def runner():
-        await main()  # main() внутри вызывает application.run_polling()
-
-    loop = asyncio.get_event_loop()
-    loop.create_task(runner())
-    loop.run_forever()
+    asyncio.run(main())
