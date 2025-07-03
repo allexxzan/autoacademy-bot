@@ -100,6 +100,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         existing_token = await conn.fetchrow("""
             SELECT * FROM tokens
             WHERE username = $1
+            ORDER BY expires DESC
             LIMIT 1
         """, username.lower())
 
