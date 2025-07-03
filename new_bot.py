@@ -547,53 +547,34 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ====== Главная точка входа — запуск бота ======
 
 async def main():
-    """
-    Основная функция запуска:
-    - создаём приложение Telegram
-    - подключаем базу
-    - загружаем список учеников
-    - добавляем обработчики команд и событий
-    - запускаем задачу автокика
-    - стартуем бота
-    - корректно закрываем соединения
-    """
     application = ApplicationBuilder().token(BOT_TOKEN).build()
 
     db_pool = await get_db_pool()
     application.bot_data["db"] = db_pool
 
     async with db_pool.acquire() as conn:
-        # Загружаем учеников из таблицы students в локальный кэш
         rows = await conn.fetch("SELECT username FROM students")
         approved = {row["username"].lower() for row in rows}
         application.bot_data["approved_usernames"] = approved
         logger.info(f"✅ Загружено учеников: {len(approved)}")
 
-    # Регистрируем обработчики команд и событий
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("sendlink", sendlink))
     application.add_handler(CommandHandler("addstudent", add_student))
     application.add_handler(CommandHandler("stats", stats))
     application.add_handler(ChatMemberHandler(handle_chat_member, ChatMemberHandler.MY_CHAT_MEMBER))
 
-    # Запускаем периодическую задачу автокика (каждые 5 минут)
     job_queue = application.job_queue
     job_queue.run_repeating(kick_expired_members, interval=300, first=10)
 
     logger.info("🚀 Бот запущен!")
 
-    # Стартуем бота и запускаем поллинг обновлений
-    await application.initialize()
-    await application.start()
-    await application.updater.start_polling()
-    await application.updater.idle()
-
-    # Корректно останавливаем бота и закрываем базу
-    logger.info("Завершение работы бота, закрываем соединение с БД...")
-    await application.stop()
-    await application.shutdown()
-    await db_pool.close()
-    logger.info("Бот успешно остановлен.")
+    try:
+        await application.run_polling()
+    finally:
+        logger.info("Завершаем работу бота, закрываем соединение с БД...")
+        await db_pool.close()
+        logger.info("Бот успешно остановлен.")
 
 # Точка входа для запуска из консоли
 if __name__ == "__main__":
