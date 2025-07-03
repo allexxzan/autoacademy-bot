@@ -171,16 +171,18 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # 🎯 Уже есть запись — проверяем
     invite_expires = token["expires"].replace(tzinfo=pytz.utc)
     subscription_ends = token["subscription_ends"].replace(tzinfo=pytz.utc)
+    used = token["used"]
+    stored_user_id = token["user_id"]
 
-    if token["used"]:
+    if used and stored_user_id:  # ссылка уже была использована и user_id есть
         await update.message.reply_text(
             "⚠️ Ты уже использовал свою ссылку. Новую может выдать только куратор."
         )
         return
 
-    if invite_expires < now_utc:
+    if invite_expires < now_utc and stored_user_id:  # просрочена и user_id уже установлен
         await update.message.reply_text(
-            "⚠️ Срок действия твоей ссылки истёк. Новую ссылку может выдать только куратор."
+            "⚠️ Срок действия твоей ссылки истёк. Новую может выдать только куратор."
         )
         return
 
