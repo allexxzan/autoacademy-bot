@@ -97,20 +97,28 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     async with context.application.bot_data["db"].acquire() as conn:
         # Проверяем активную подписку
-        active = await conn.fetchrow("""
+        existing_token = await conn.fetchrow("""
             SELECT * FROM tokens
-            WHERE username = $1 AND used = TRUE AND subscription_ends > $2
+            WHERE username = $1
             LIMIT 1
-        """, username.lower(), now)
+        """, username.lower())
 
-        if active:
-            ends_msk = active["subscription_ends"].replace(tzinfo=pytz.utc).astimezone(MOSCOW_TZ)
-            await update.message.reply_text(
-                f"🔐 У тебя уже есть доступ до {ends_msk.strftime('%Y-%m-%d %H:%M:%S %Z')}.\n"
-                "Если есть вопросы — обратись к своему куратору."
-            )
-            logger.info(f"Пользователь @{username} запросил /start, но доступ уже активен.")
-            return
+        if existing_token:
+            if existing_token["used"]:
+                await update.message.reply_text(
+                "⚠️ Ссылка уже была использована. Повторная выдача невозможна.\n"
+                "Обратитесь к своему куратору для сброса."
+                )
+                logger.info(f"Пользователь @{username} уже использовал токен.")
+                return
+            else:
+                await update.message.reply_text(
+                    "⚠️ Ссылка уже была сгенерирована, но ещё не использована.\n"
+                    "Проверь свою ссылку и используй её. Если не работает — обратись к куратору."
+                )
+                logger.info(f"Пользователь @{username} пытался получить ссылку повторно, но она уже есть.")
+                return
+
 
         # Проверяем, была ли уже выдана ссылка
         existing_token = await conn.fetchrow("""
@@ -124,8 +132,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "⚠️ Ссылка уже была выдана ранее. Повторная выдача невозможна.\n"
                 "Обратитесь к своему куратору для сброса."
             )
-            logger.info(f"Пользователь @{username} запросил /start, но уже есть использованная ссылка.")
             return
+
 
         # Генерируем уникальную ссылку
         token = uuid.uuid4().hex[:8]
