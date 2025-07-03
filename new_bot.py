@@ -97,86 +97,34 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     async with context.application.bot_data["db"].acquire() as conn:
         # Проверяем активную подписку
-        existing_token = await conn.fetchrow("""
-            SELECT * FROM tokens
-            WHERE username = $1
-            ORDER BY expires DESC
-            LIMIT 1
-        """, username.lower())
+            existing_token = await conn.fetchrow("""
+        SELECT * FROM tokens
+        WHERE username = $1
+        ORDER BY expires DESC
+        LIMIT 1
+    """, username.lower())
 
-        if existing_token:
-            if existing_token["used"]:
-                await update.message.reply_text(
+    if existing_token:
+        if existing_token["used"]:
+            await update.message.reply_text(
                 "⚠️ Ссылка уже была использована. Повторная выдача невозможна.\n"
                 "Обратитесь к своему куратору для сброса."
-                )
-                logger.info(f"Пользователь @{username} уже использовал токен.")
-                return
-            else:
-                await update.message.reply_text(
-                    "⚠️ Ссылка уже была сгенерирована, но ещё не использована.\n"
-                    "Проверь свою ссылку и используй её. Если не работает — обратись к куратору."
-                )
-                logger.info(f"Пользователь @{username} пытался получить ссылку повторно, но она уже есть.")
-                return
-
-
-        # Проверяем, была ли уже выдана ссылка
-        existing_token = await conn.fetchrow("""
-            SELECT * FROM tokens
-            WHERE username = $1 AND used = TRUE
-            LIMIT 1
-        """, username.lower())
-
-        if existing_token:
+            )
+            logger.info(f"Пользователь @{username} уже использовал токен.")
+            return
+        else:
+            # Ссылка активна, ждём захода в канал
+            invite_expires = existing_token["expires"]
+            ends_at = existing_token["subscription_ends"]
+            ends_msk = ends_at.replace(tzinfo=pytz.utc).astimezone(MOSCOW_TZ)
             await update.message.reply_text(
-                "⚠️ Ссылка уже была выдана ранее. Повторная выдача невозможна.\n"
-                "Обратитесь к своему куратору для сброса."
+                f"⚠️ Ссылка уже была сгенерирована, но ещё не использована.\n"
+                f"🔗 Срок действия: до {invite_expires.replace(tzinfo=pytz.utc).astimezone(MOSCOW_TZ).strftime('%Y-%m-%d %H:%M:%S %Z')}\n"
+                f"⏳ Подписка закончится: {ends_msk.strftime('%Y-%m-%d %H:%M:%S %Z')}\n"
+                f"Проверь ссылку и используй её. Если не работает — обратись к куратору."
             )
+            logger.info(f"Пользователь @{username} пытался повторно, но ссылка ещё активна.")
             return
-
-
-        # Генерируем уникальную ссылку
-        token = uuid.uuid4().hex[:8]
-        invite_expires = now + datetime.timedelta(minutes=60)
-        subscription_ends = now + datetime.timedelta(hours=1)
-
-        try:
-            invite: ChatInviteLink = await context.bot.create_chat_invite_link(
-                chat_id=CHANNEL_ID,
-                expire_date=invite_expires,
-                member_limit=1
-            )
-        except Exception as e:
-            logger.error(f"Ошибка создания ссылки для @{username}: {e}", exc_info=True)
-            await update.message.reply_text("Ошибка при создании ссылки. Попробуйте позже.")
-            return
-
-        # Сохраняем токен в базу
-        await conn.execute("""
-            INSERT INTO tokens (token, username, user_id, invite_link, expires, subscription_ends, used, joined)
-            VALUES ($1, $2, $3, $4, $5, $6, FALSE, FALSE)
-        """, token, username.lower(), user.id, invite.invite_link, invite_expires, subscription_ends)
-
-        ends_msk = subscription_ends.replace(tzinfo=pytz.utc).astimezone(MOSCOW_TZ)
-        await update.message.reply_text(
-            f"Привет! Вот твоя уникальная ссылка для доступа в закрытый телеграм канал.\n"
-            f"Нажми на неё, чтобы подписаться.\n"
-            f"Срок действия ссылки — 1 час.\n\n"
-            f"🔗 Ссылка: {invite.invite_link}\n"
-            f"⏳ Подписка закончится: {ends_msk.strftime('%Y-%m-%d %H:%M:%S %Z')}\n\n"
-            f"Если есть вопросы — обратись к своему куратору."
-        )
-        logger.info(f"✅ Выдана ссылка @{username} (ID: {user.id}) до {subscription_ends}")
-
-        # Отправляем данные в Google Sheets
-        await send_to_google_sheets(
-            user.id,
-            username.lower(),
-            user.first_name or "",
-            now.strftime("%Y-%m-%d %H:%M:%S"),
-            subscription_ends.strftime("%Y-%m-%d %H:%M:%S")
-        )
 
 # Часть 3: Обработка вступления, оповещения и автокик
 
