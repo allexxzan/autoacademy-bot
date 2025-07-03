@@ -32,7 +32,6 @@ ADMINS = {
     754549018: "Дмитрий Булатов (@dimabu5)"
 }
 
-# Логирование — максимальный уровень, формат с временем и уровнем
 logging.basicConfig(
     level=logging.DEBUG,
     format='%(asctime)s - %(levelname)s - %(name)s - %(message)s'
@@ -42,14 +41,21 @@ logger = logging.getLogger(__name__)
 async def get_db_pool():
     try:
         logger.info("Подключаемся к базе данных...")
-        pool = await asyncpg.create_pool(DATABASE_URL)
+        pool = await asyncpg.create_pool(DATABASE_URL, max_size=10)
         logger.info("Подключение к базе установлено успешно.")
         return pool
     except Exception as e:
         logger.critical(f"Ошибка подключения к базе данных: {e}", exc_info=True)
         raise
 
-# Часть 2: Команда /start, отправка статистики в Google Sheets
+async def notify_kurators(context: ContextTypes.DEFAULT_TYPE, message: str):
+    for admin_id in ADMINS:
+        try:
+            await context.bot.send_message(admin_id, message)
+            logger.debug(f"Отправлено уведомление куратору {ADMINS[admin_id]} (ID: {admin_id})")
+        except Exception as e:
+            logger.warning(f"Не удалось отправить уведомление куратору {admin_id}: {e}", exc_info=True)
+
 async def send_to_google_sheets(user_id: int, username: str, first_name: str, start_date: str, end_date: str):
     if not GOOGLE_SHEETS_WEBHOOK:
         logger.warning("🚨 GOOGLE_SHEETS_WEBHOOK не задан, данные не отправляются")
@@ -78,7 +84,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     username = user.username
     now = datetime.datetime.utcnow()
 
-    # Проверка username
     if not username:
         await update.message.reply_text(
             "❗️ У тебя не указан username в Telegram. Добавь его в настройках профиля."
@@ -86,7 +91,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.info(f"Пользователь {user.id} без username попытался начать.")
         return
 
-    # Проверка, является ли учеником
     if username.lower() not in context.application.bot_data.get("approved_usernames", set()):
         await update.message.reply_text(
             "⛔️ Ты не в списке учеников АвтоАкадемии. Доступ запрещён.\n"
@@ -96,13 +100,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     async with context.application.bot_data["db"].acquire() as conn:
-        # Проверяем активную подписку
-            existing_token = await conn.fetchrow("""
-        SELECT * FROM tokens
-        WHERE username = $1
-        ORDER BY expires DESC
-        LIMIT 1
-    """, username.lower())
+        existing_token = await conn.fetchrow("""
+            SELECT * FROM tokens
+            WHERE username = $1
+            ORDER BY expires DESC
+            LIMIT 1
+        """, username.lower())
 
     if existing_token:
         invite_expires = existing_token["expires"].replace(tzinfo=pytz.utc)
@@ -118,7 +121,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         now_utc = datetime.datetime.utcnow().replace(tzinfo=pytz.utc)
 
         if invite_expires < now_utc:
-            # Ссылка просрочена — удаляем и выдаём новую
             await conn.execute("DELETE FROM tokens WHERE username = $1", username.lower())
 
             try:
@@ -127,6 +129,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     expire_date=now_utc + datetime.timedelta(minutes=30),
                     member_limit=1
                 )
+                logger.info(f"Создана новая ссылка для @{username}")
             except Exception as e:
                 logger.error(f"Не удалось создать новую ссылку для @{username}: {e}", exc_info=True)
                 await update.message.reply_text("⚠️ Ошибка при создании новой ссылки. Обратись к куратору.")
@@ -151,7 +154,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
-        # Если ссылка ещё валидна и не использована
         await update.message.reply_text(
             f"⚠️ Ссылка уже была сгенерирована, но ещё не использована.\n"
             f"🔗 Срок действия: до {invite_expires.astimezone(MOSCOW_TZ).strftime('%Y-%m-%d %H:%M:%S %Z')}\n"
@@ -159,17 +161,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"Проверь ссылку и используй её. Если не работает — обратись к куратору."
         )
         return
-  
-
-# Часть 3: Обработка вступления, оповещения и автокик
-
-async def notify_kurators(context: ContextTypes.DEFAULT_TYPE, message: str):
-    for admin_id in ADMINS.keys():
-        try:
-            await context.bot.send_message(admin_id, message)
-            logger.debug(f"Отправлено уведомление куратору {ADMINS[admin_id]} (ID: {admin_id})")
-        except Exception as e:
-            logger.warning(f"Не удалось отправить уведомление куратору {admin_id}: {e}", exc_info=True)
 
 async def handle_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_member = update.my_chat_member
@@ -312,12 +303,11 @@ async def kick_expired_members(context: ContextTypes.DEFAULT_TYPE):
             except Exception as e:
                 logger.warning(f"Не удалось обработать участника ID {user_id}: {e}", exc_info=True)
 
-# Часть 4: Управление ссылками, добавление учеников, статистика
-
 async def sendlink(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if user.id not in ADMINS:
         await update.message.reply_text("⛔️ Доступ запрещён.")
+        logger.warning(f"Пользователь {user.id} попытался использовать /sendlink без доступа")
         return
 
     if not context.args:
@@ -326,7 +316,7 @@ async def sendlink(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     username = context.args[0].lstrip("@").lower()
 
-    if username.lower() not in context.application.bot_data.get("approved_usernames", set()):
+    if username not in context.application.bot_data.get("approved_usernames", set()):
         await update.message.reply_text("❌ Пользователь не найден в списке учеников.")
         return
 
@@ -371,6 +361,7 @@ async def sendlink(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 expire_date=invite_expires,
                 member_limit=1
             )
+            logger.info(f"Создана новая ссылка для @{username}")
         except Exception as e:
             logger.error(f"Ошибка создания ссылки для @{username}: {e}", exc_info=True)
             await update.message.reply_text("Ошибка при создании ссылки. Попробуйте позже.")
@@ -391,12 +382,13 @@ async def sendlink(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"Попроси ученика ввести /start и использовать ссылку."
         )
         logger.info(f"Выдана новая ссылка @{username} до {subscription_ends}")
-        
-        context.application.bot_data["approved_usernames"].add(username.lower())
+
+        context.application.bot_data["approved_usernames"].add(username)
 
 async def add_student(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in ADMINS:
         await update.message.reply_text("⛔️ Доступ запрещён.")
+        logger.warning(f"Пользователь {update.effective_user.id} попытался использовать /addstudent без доступа")
         return
 
     if len(context.args) < 1:
@@ -405,16 +397,15 @@ async def add_student(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     username = context.args[0].lstrip("@").lower()
 
-    if username.lower() in context.application.bot_data.get("approved_usernames", set()):
+    if username in context.application.bot_data.get("approved_usernames", set()):
         await update.message.reply_text(f"Пользователь @{username} уже в списке учеников.")
         return
 
-    # Добавление
     async with context.application.bot_data["db"].acquire() as conn:
-        await conn.execute("INSERT INTO students (username) VALUES ($1)", username.lower())
+        await conn.execute("INSERT INTO students (username) VALUES ($1)", username)
+        logger.info(f"Добавлен новый ученик @{username}")
 
-    # Обновляем список в bot_data
-    context.application.bot_data["approved_usernames"].add(username.lower())
+    context.application.bot_data["approved_usernames"].add(username)
 
     await update.message.reply_text(
         f"✅ Пользователь @{username} добавлен в список учеников.\nОн сможет получить доступ через /start."
@@ -424,6 +415,7 @@ async def add_student(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in ADMINS:
         await update.message.reply_text("⛔️ Доступ запрещён.")
+        logger.warning(f"Пользователь {update.effective_user.id} попытался использовать /stats без доступа")
         return
 
     async with context.application.bot_data["db"].acquire() as conn:
@@ -433,21 +425,15 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         active = await conn.fetchval("SELECT COUNT(*) FROM tokens WHERE used = TRUE AND subscription_ends > now()")
         expired = await conn.fetchval("SELECT COUNT(*) FROM tokens WHERE used = TRUE AND subscription_ends <= now()")
 
-        await update.message.reply_text(
-            f"📊 Статистика токенов:\n"
-            f"• Всего: {total}\n"
-            f"• ✅ Использованных: {used}\n"
-            f"• 🕸 Неиспользованных: {unused}\n"
-            f"• 🟢 Активных: {active}\n"
-            f"• 🔴 Истекших: {expired}"
-        )
-
-import asyncio
-import logging
-from telegram.ext import ApplicationBuilder
-
-logger = logging.getLogger(__name__)
-logging.basicConfig(level=logging.INFO)
+    await update.message.reply_text(
+        f"📊 Статистика токенов:\n"
+        f"• Всего: {total}\n"
+        f"• ✅ Использованных: {used}\n"
+        f"• 🕸 Неиспользованных: {unused}\n"
+        f"• 🟢 Активных: {active}\n"
+        f"• 🔴 Истекших: {expired}"
+    )
+    logger.info(f"Отправлена статистика пользователю {update.effective_user.id}")
 
 async def main():
     application = ApplicationBuilder().token(BOT_TOKEN).build()
@@ -477,16 +463,12 @@ async def main():
     await application.updater.start_polling()
     await application.updater.idle()
 
+    logger.info("Завершение работы бота, закрываем соединение с БД...")
     await application.stop()
     await application.shutdown()
     await db_pool.close()
+    logger.info("Бот успешно остановлен.")
 
 if __name__ == "__main__":
     import asyncio
-
-    async def runner():
-        await main()  # main() внутри вызывает application.run_polling()
-
-    loop = asyncio.get_event_loop()
-    loop.create_task(runner())
-    loop.run_forever()
+    asyncio.run(main())
