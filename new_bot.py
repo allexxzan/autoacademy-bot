@@ -435,6 +435,7 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     logger.info(f"Отправлена статистика пользователю {update.effective_user.id}")
 
+
 async def main():
     application = ApplicationBuilder().token(BOT_TOKEN).build()
 
@@ -471,4 +472,10 @@ async def main():
 
 if __name__ == "__main__":
     import asyncio
-    asyncio.run(main())
+
+    async def runner():
+        await main()  # main() внутри вызывает application.run_polling()
+
+    loop = asyncio.get_event_loop()
+    loop.create_task(runner())
+    loop.run_forever()
