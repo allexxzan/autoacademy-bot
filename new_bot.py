@@ -109,7 +109,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     username = username.lower()
-    now = datetime.datetime.utcnow()
+    now = datetime.datetime.utcnow().replace(tzinfo=pytz.utc)  # Добавляем таймзону UTC
 
     async with context.application.bot_data["db"].acquire() as conn:
         record = await conn.fetchrow("""
@@ -121,10 +121,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         """, username)
 
         if record:
-            expires = record["expires"]
+            expires = record["expires"].replace(tzinfo=pytz.utc)  # Добавляем таймзону к expires
             used = record["used"]
             invite_link = record["invite_link"]
-            subscription_ends = record["subscription_ends"]
+            subscription_ends = record["subscription_ends"].replace(tzinfo=pytz.utc)  # Добавляем таймзону
 
             if not used:
                 if expires > now:
@@ -144,7 +144,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     return
             else:
                 # used=True — ссылка уже использована, можно выдавать новую ниже
-
                 pass
 
         # Если записи нет или used=True — выдаём новую ссылку (только для новых или обнулённых)
@@ -161,10 +160,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         invite_expires = now + datetime.timedelta(minutes=30)
         subscription_ends = now + datetime.timedelta(hours=1)
 
+        invite_expires_ts = int(invite_expires.timestamp())  # переводим в timestamp
+
         try:
             invite: ChatInviteLink = await context.bot.create_chat_invite_link(
                 chat_id=CHANNEL_ID,
-                expire_date=invite_expires,
+                expire_date=invite_expires_ts,  # передаём timestamp
                 member_limit=1
             )
         except Exception as e:
@@ -184,7 +185,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"Подписка до: {subscription_ends.astimezone(MOSCOW_TZ).strftime('%Y-%m-%d %H:%M:%S %Z')}\n"
             f"Пожалуйста, используй её вовремя."
         )
-        return
+        return  # явное завершение
 
 # ====== Обработчик смены статуса участника в чате (например, вступление) ======
 
