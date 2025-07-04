@@ -36,6 +36,9 @@ MOSCOW_TZ = pytz.timezone('Europe/Moscow')
 # ID канала, в котором работает бот (отрицательное число — супер-группа/канал)
 CHANNEL_ID = -1002673430364
 
+# ID чата, куда слать подозрения на леваков
+CURATOR_CHAT_ID = 5744533263  # Можно выбрать любого куратора
+
 # Словарь с ID админов (ключ — ID пользователя, значение — описание)
 ADMINS = {
     5744533263: "Главный куратор",
@@ -68,10 +71,6 @@ async def get_db_pool():
         raise
 
 async def notify_kurators(context: ContextTypes.DEFAULT_TYPE, message: str):
-    """
-    Отправляет сообщение всем кураторам (админам).
-    Используется для уведомления о важных событиях, например, о входе чужого пользователя.
-    """
     for admin_id in ADMINS:
         try:
             await context.bot.send_message(admin_id, message)
@@ -80,10 +79,6 @@ async def notify_kurators(context: ContextTypes.DEFAULT_TYPE, message: str):
             logger.warning(f"Не удалось отправить уведомление куратору {admin_id}: {e}", exc_info=True)
 
 async def send_to_google_sheets(user_id: int, username: str, first_name: str, start_date: str, end_date: str):
-    """
-    Отправляет данные пользователя (подписки) в Google Sheets через webhook.
-    Используем aiohttp для POST-запроса.
-    """
     if not GOOGLE_SHEETS_WEBHOOK:
         logger.warning("🚨 GOOGLE_SHEETS_WEBHOOK не задан, данные не отправляются")
         return
@@ -110,6 +105,7 @@ async def send_to_google_sheets(user_id: int, username: str, first_name: str, st
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     username = user.username
+    user_id = user.id
 
     if not username:
         await update.message.reply_text(
@@ -141,30 +137,55 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             used = token["used"]
             stored_user_id = token["user_id"]
 
-            if used and stored_user_id:
+            # 🕵️ Проверка на левака
+            if stored_user_id and stored_user_id != user_id:
+                await context.bot.send_message(
+                    chat_id=CURATOR_CHAT_ID,
+                    text=(
+                        f"🚨 *Подозрение на левака!*\n\n"
+                        f"👤 Юзер @{username} (id: `{user_id}`) запустил /start,\n"
+                        f"но в базе записан другой user_id: `{stored_user_id}`\n\n"
+                        f"Проверь, кто он такой."
+                    ),
+                    parse_mode="Markdown"
+                )
+
+            # 🔒 Если уже использовал — просто напоминаем
+            if used and stored_user_id == user_id:
                 await update.message.reply_text(
                     "⚠️ Ты уже использовал свою ссылку. Новую может выдать только куратор."
                 )
                 return
 
-            if invite_expires < now_utc and stored_user_id:
+            # 🔒 Если срок ссылки истёк — но user_id совпадает
+            if invite_expires < now_utc and stored_user_id == user_id:
                 await update.message.reply_text(
                     "⚠️ Срок действия твоей ссылки истёк. Новую может выдать только куратор."
                 )
                 return
 
+            # 🔄 Ссылка ещё валидна — просто напомним
             expires_msk = invite_expires.astimezone(MOSCOW_TZ).strftime('%Y-%m-%d %H:%M:%S %Z')
             ends_msk = subscription_ends.astimezone(MOSCOW_TZ).strftime('%Y-%m-%d %H:%M:%S %Z')
 
             await update.message.reply_text(
-                f"🔗 Вот твоя ссылка:\n{token['invite_link']}\n\n"
+                f"⚠️ Ты уже получил ссылку, которая ещё действует.\n"
                 f"Срок действия: до {expires_msk}\n"
                 f"Подписка до: {ends_msk}\n"
-                "Пожалуйста, используй ёё вовремя. Повторно получить можно только через куратора."
+                "Если ссылка не работает — обратись к куратору."
             )
+
+            # 🔐 При этом, если user_id ещё не записан — сохраняем
+            if stored_user_id is None:
+                await conn.execute("""
+                    UPDATE tokens
+                    SET user_id = $1
+                    WHERE id = $2
+                """, user_id, token["id"])
+
             return
 
-        # Создаём новую ссылку
+        # 📩 Первая выдача — создаём новую ссылку
         try:
             new_invite = await context.bot.create_chat_invite_link(
                 chat_id=CHANNEL_ID,
@@ -181,8 +202,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         await conn.execute("""
             INSERT INTO tokens (token, username, user_id, invite_link, expires, subscription_ends, used, created_at)
-            VALUES ($1, $2, NULL, $3, $4, $5, FALSE, $6)
-        """, uuid.uuid4().hex[:8], username.lower(), new_invite.invite_link, new_expires, new_ends, now_utc)
+            VALUES ($1, $2, $3, $4, $5, $6, FALSE, $7)
+        """, uuid.uuid4().hex[:8], username.lower(), user_id, new_invite.invite_link, new_expires, new_ends, now_utc)
 
         expires_msk = new_expires.astimezone(MOSCOW_TZ).strftime('%Y-%m-%d %H:%M:%S %Z')
         ends_msk = new_ends.astimezone(MOSCOW_TZ).strftime('%Y-%m-%d %H:%M:%S %Z')
@@ -191,8 +212,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"🔗 Вот твоя ссылка:\n{new_invite.invite_link}\n\n"
             f"Срок действия: до {expires_msk}\n"
             f"Подписка до: {ends_msk}\n"
-            "Пожалуйста, используй ёё вовремя. Повторно получить можно только через куратора."
-        )
+            "Пожалуйста, используй её вовремя. Повторно получить можно только через куратора."
+        )  
+        return
 
 # ====== Обработчик смены статуса участника в чате (например, вступление) ======
 
@@ -294,7 +316,7 @@ async def kick_expired_members(context: ContextTypes.DEFAULT_TYPE):
                 try:
                     await context.bot.send_message(
                         user_id,
-                        "⚠️ Завтра истекает срок действия твоей подписки."
+                        "⚠️ Срок действия твоей подписки скоро истекает."
                     )
                     logger.info(f"Предупреждение отправлено @{username}")
                 except Exception as e:
