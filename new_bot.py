@@ -109,7 +109,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     username = username.lower()
-    now = datetime.datetime.utcnow().replace(tzinfo=pytz.utc)  # Добавляем таймзону UTC
+    now = datetime.datetime.utcnow().replace(tzinfo=pytz.utc)
 
     async with context.application.bot_data["db"].acquire() as conn:
         record = await conn.fetchrow("""
@@ -121,10 +121,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         """, username)
 
         if record:
-            expires = record["expires"].replace(tzinfo=pytz.utc)  # Добавляем таймзону к expires
+            expires = record["expires"].replace(tzinfo=pytz.utc)
             used = record["used"]
             invite_link = record["invite_link"]
-            subscription_ends = record["subscription_ends"].replace(tzinfo=pytz.utc)  # Добавляем таймзону
+            subscription_ends = record["subscription_ends"].replace(tzinfo=pytz.utc)
 
             if not used:
                 if expires > now:
@@ -146,9 +146,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 # used=True — ссылка уже использована, можно выдавать новую ниже
                 pass
 
-        # Если записи нет или used=True — выдаём новую ссылку (только для новых или обнулённых)
-
-        # Проверяем, что username есть в approved_usernames (если используешь такой список)
         if username not in context.application.bot_data.get("approved_usernames", set()):
             await update.message.reply_text(
                 "❌ Твой username не найден в списке учеников. Обратись к куратору."
@@ -178,6 +175,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 INSERT INTO tokens (token, username, user_id, invite_link, expires, subscription_ends, used)
                 VALUES ($1, $2, NULL, $3, $4, $5, FALSE)
             """, token, username, invite.invite_link, invite_expires, subscription_ends)
+
+        context.application.bot_data["approved_usernames"].add(username)  # Кэшируем username
 
         await update.message.reply_text(
             f"🔗 Вот твоя новая ссылка:\n{invite.invite_link}\n\n"
@@ -363,6 +362,7 @@ async def kick_expired_members(context: ContextTypes.DEFAULT_TYPE):
                 logger.warning(f"Не удалось обработать участника ID {user_id}: {e}", exc_info=True)
 
 # ====== Команда /sendlink — выдача новой ссылки приглашения ======
+# Команда /sendlink
 async def sendlink(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if user.id not in ADMINS:
@@ -375,11 +375,11 @@ async def sendlink(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     username = context.args[0].lstrip("@").lower()
 
-    if username not in context.application.bot_data["approved_usernames"]:
+    if username not in context.application.bot_data.get("approved_usernames", set()):
         await update.message.reply_text("❌ Пользователь не найден в списке учеников.")
         return
 
-    now = datetime.datetime.utcnow()
+    now = datetime.datetime.utcnow().replace(tzinfo=pytz.utc)
 
     async with context.application.bot_data["db"].acquire() as conn:
         # Деактивируем старые ссылки (ставим used=True, user_id=NULL, expires в прошлое)
@@ -392,6 +392,7 @@ async def sendlink(update: Update, context: ContextTypes.DEFAULT_TYPE):
             WHERE username = $1 AND used = FALSE
         """, username)
 
+        # Создаём новую ссылку
         invite_expires = now + datetime.timedelta(minutes=30)
         subscription_ends = now + datetime.timedelta(hours=1)
 
@@ -415,6 +416,9 @@ async def sendlink(update: Update, context: ContextTypes.DEFAULT_TYPE):
             INSERT INTO tokens (token, username, user_id, invite_link, expires, subscription_ends, used)
             VALUES ($1, $2, NULL, $3, $4, $5, FALSE)
         """, token, username, invite.invite_link, invite_expires, subscription_ends)
+
+    # Обновляем кэш, если надо — тут не помешает
+    context.application.bot_data["approved_usernames"].add(username)
 
     ends_msk = subscription_ends.replace(tzinfo=pytz.utc).astimezone(MOSCOW_TZ)
     expires_msk = invite_expires.replace(tzinfo=pytz.utc).astimezone(MOSCOW_TZ)
