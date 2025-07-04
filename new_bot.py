@@ -136,13 +136,35 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         """, username.lower())
 
         if token:
-            # 🎯 Уже получал ссылку ранее — ничего больше не даём
+            invite_expires = token["expires"].replace(tzinfo=pytz.utc)
+            subscription_ends = token["subscription_ends"].replace(tzinfo=pytz.utc)
+            used = token["used"]
+            stored_user_id = token["user_id"]
+
+            if used and stored_user_id:
+                await update.message.reply_text(
+                    "⚠️ Ты уже использовал свою ссылку. Новую может выдать только куратор."
+                )
+                return
+
+            if invite_expires < now_utc and stored_user_id:
+                await update.message.reply_text(
+                    "⚠️ Срок действия твоей ссылки истёк. Новую может выдать только куратор."
+                )
+                return
+
+            expires_msk = invite_expires.astimezone(MOSCOW_TZ).strftime('%Y-%m-%d %H:%M:%S %Z')
+            ends_msk = subscription_ends.astimezone(MOSCOW_TZ).strftime('%Y-%m-%d %H:%M:%S %Z')
+
             await update.message.reply_text(
-                "⚠️ Ты уже получил ссылку. Повторно её может выдать только куратор."
+                f"🔗 Вот твоя ссылка:\n{token['invite_link']}\n\n"
+                f"Срок действия: до {expires_msk}\n"
+                f"Подписка до: {ends_msk}\n"
+                "Пожалуйста, используй ёё вовремя. Повторно получить можно только через куратора."
             )
             return
 
-        # 🎯 Впервые — создаём новую ссылку
+        # Создаём новую ссылку
         try:
             new_invite = await context.bot.create_chat_invite_link(
                 chat_id=CHANNEL_ID,
@@ -169,37 +191,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"🔗 Вот твоя ссылка:\n{new_invite.invite_link}\n\n"
             f"Срок действия: до {expires_msk}\n"
             f"Подписка до: {ends_msk}\n"
-            "Пожалуйста, используй её вовремя. Повторно получить можно только через куратора."
+            "Пожалуйста, используй ёё вовремя. Повторно получить можно только через куратора."
         )
-
-    # 🎯 Уже есть запись — проверяем
-    invite_expires = token["expires"].replace(tzinfo=pytz.utc)
-    subscription_ends = token["subscription_ends"].replace(tzinfo=pytz.utc)
-    used = token["used"]
-    stored_user_id = token["user_id"]
-
-    if used and stored_user_id:  # ссылка уже была использована и user_id есть
-        await update.message.reply_text(
-            "⚠️ Ты уже использовал свою ссылку. Новую может выдать только куратор."
-        )
-        return
-
-    if invite_expires < now_utc and stored_user_id:  # просрочена и user_id уже установлен
-        await update.message.reply_text(
-            "⚠️ Срок действия твоей ссылки истёк. Новую может выдать только куратор."
-        )
-        return
-
-    # 🎯 Всё ещё действует — просто напоминаем
-    expires_msk = invite_expires.astimezone(MOSCOW_TZ).strftime('%Y-%m-%d %H:%M:%S %Z')
-    ends_msk = subscription_ends.astimezone(MOSCOW_TZ).strftime('%Y-%m-%d %H:%M:%S %Z')
-
-    await update.message.reply_text(
-        f"⚠️ Ты уже получил ссылку, которая ещё действует.\n"
-        f"Срок действия: до {expires_msk}\n"
-        f"Подписка до: {ends_msk}\n"
-        "Если ссылка не работает — обратись к куратору."
-    )
 
 # ====== Обработчик смены статуса участника в чате (например, вступление) ======
 
