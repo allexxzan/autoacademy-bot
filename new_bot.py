@@ -385,11 +385,15 @@ async def sendlink(update: Update, context: ContextTypes.DEFAULT_TYPE):
             DELETE FROM tokens WHERE username = $1
         """, username)
 
+        # Логирование удаления
+        logger.info(f"Старые данные для @{username} удалены.")
+
         # Шаг 2: Генерация новой одноразовой ссылки
         invite_expires = now + datetime.timedelta(minutes=30)  # срок действия 30 минут
         subscription_ends = now + datetime.timedelta(hours=1)  # подписка длится 1 час
 
         invite_expires_ts = int(invite_expires.timestamp())  # преобразуем в timestamp
+        logger.info(f"Дата истечения ссылки (expire_date): {invite_expires_ts}")
 
         try:
             invite: ChatInviteLink = await context.bot.create_chat_invite_link(
@@ -397,6 +401,7 @@ async def sendlink(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 expire_date=invite_expires_ts,
                 member_limit=1  # одноразовая ссылка
             )
+            logger.info(f"Новая ссылка для @{username}: {invite.invite_link}")
         except Exception as e:
             await update.message.reply_text("❌ Ошибка при создании ссылки. Попробуйте позже.")
             logger.error(f"Ошибка создания ссылки для @{username}: {e}", exc_info=True)
@@ -413,6 +418,7 @@ async def sendlink(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Обновление кэша
     context.application.bot_data["approved_usernames"].add(username)
+    logger.info(f"Кэш для @{username} обновлен.")
 
     # Переводим время в часовой пояс Москвы
     ends_msk = subscription_ends.replace(tzinfo=pytz.utc).astimezone(MOSCOW_TZ)
