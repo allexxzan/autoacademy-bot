@@ -360,7 +360,7 @@ async def kick_expired_members(context: ContextTypes.DEFAULT_TYPE):
             except Exception as e:
                 logger.warning(f"Не удалось обработать участника ID {user_id}: {e}", exc_info=True)
 
-# ====== Команда /sendlink — выдача новой одноразовой ссылки приглашения ======
+# ====== Команда /sendlink — полное очищение данных и выдача новой одноразовой ссылки приглашения ======
 async def sendlink(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if user.id not in ADMINS:
@@ -379,15 +379,13 @@ async def sendlink(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     now = datetime.datetime.utcnow().replace(tzinfo=pytz.utc)
 
+    # Шаг 1: Очистка всех старых данных пользователя
     async with context.application.bot_data["db"].acquire() as conn:
-        # Очистка всех старых данных пользователя
         await conn.execute("""
-            UPDATE tokens
-            SET used = TRUE, user_id = NULL, expires = NOW() - INTERVAL '1 second', subscription_ends = NOW() - INTERVAL '1 second'
-            WHERE username = $1
+            DELETE FROM tokens WHERE username = $1
         """, username)
 
-        # Генерация новой одноразовой ссылки
+        # Шаг 2: Генерация новой одноразовой ссылки
         invite_expires = now + datetime.timedelta(minutes=30)  # срок действия 30 минут
         subscription_ends = now + datetime.timedelta(hours=1)  # подписка длится 1 час
 
@@ -404,10 +402,10 @@ async def sendlink(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.error(f"Ошибка создания ссылки для @{username}: {e}", exc_info=True)
             return
 
-        # Генерация нового токена для хранения
+        # Шаг 3: Генерация нового токена для хранения
         token = uuid.uuid4().hex[:8]
 
-        # Запись новой ссылки в базу данных
+        # Шаг 4: Запись новой ссылки в базу данных
         await conn.execute("""
             INSERT INTO tokens (token, username, user_id, invite_link, expires, subscription_ends, used)
             VALUES ($1, $2, NULL, $3, $4, $5, FALSE)
@@ -420,6 +418,7 @@ async def sendlink(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ends_msk = subscription_ends.replace(tzinfo=pytz.utc).astimezone(MOSCOW_TZ)
     expires_msk = invite_expires.replace(tzinfo=pytz.utc).astimezone(MOSCOW_TZ)
 
+    # Шаг 5: Отправляем сообщение с новой ссылкой
     await update.message.reply_text(
         f"♻️ Ссылка для @{username} обновлена.\n"
         f"Срок действия ссылки: {expires_msk.strftime('%Y-%m-%d %H:%M:%S %Z')}\n"
