@@ -137,6 +137,16 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             used = token["used"]
             stored_user_id = token["user_id"]
 
+            # 💀 Если старая неиспользованная ссылка, но уже истекла и никому не принадлежит — забудь про неё
+            if not used and stored_user_id is None and invite_expires < now_utc:
+                token = None  # сброс, чтобы ниже создать новую ссылку
+        
+        if token:
+            invite_expires = token["expires"].replace(tzinfo=pytz.utc)
+            subscription_ends = token["subscription_ends"].replace(tzinfo=pytz.utc)
+            used = token["used"]
+            stored_user_id = token["user_id"]
+
             # 🕵️ Проверка на левака
             if stored_user_id and stored_user_id != user_id:
                 await context.bot.send_message(
