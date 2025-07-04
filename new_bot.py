@@ -109,7 +109,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     username = username.lower()
-    now = datetime.datetime.utcnow()
+    
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc)
 
     async with context.application.bot_data["db"].acquire() as conn:
         record = await conn.fetchrow("""
