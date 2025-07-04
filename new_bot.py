@@ -22,11 +22,8 @@ from telegram.error import BadRequest
 load_dotenv()
 
 # ====== Конфигурация ======
-# Токен бота Telegram
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-# URL базы данных PostgreSQL (для asyncpg)
 DATABASE_URL = os.getenv("DATABASE_URL")
-# Вебхук для Google Sheets (куда отправлять данные)
 GOOGLE_SHEETS_WEBHOOK = os.getenv("GOOGLE_SHEETS_WEBHOOK")
 
 # Часовой пояс Москвы для отображения времени
@@ -34,8 +31,6 @@ MOSCOW_TZ = pytz.timezone('Europe/Moscow')
 
 # ID канала, в котором работает бот (отрицательное число — супер-группа/канал)
 CHANNEL_ID = -1002673430364
-
-# ID чата, куда слать подозрения на леваков
 CURATOR_CHAT_ID = 5744533263  # Можно выбрать любого куратора
 
 # Словарь с ID админов (ключ — ID пользователя, значение — описание)
@@ -55,10 +50,6 @@ logger = logging.getLogger(__name__)
 
 # ====== Функции для работы с базой и вспомогательные ======
 async def get_db_pool():
-    """
-    Создаёт пул соединений с PostgreSQL.
-    Используем asyncpg.create_pool для удобной работы с асинхронной БД.
-    """
     try:
         logger.info("Подключаемся к базе данных...")
         pool = await asyncpg.create_pool(DATABASE_URL, max_size=10)
@@ -111,11 +102,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Проверка базы данных на наличие активной ссылки
     async with context.application.bot_data["db"].acquire() as conn:
-        record = await conn.fetchrow("""
-            SELECT invite_link, expires, subscription_ends
-            FROM tokens
-            WHERE username = $1
-            ORDER BY expires DESC
+        record = await conn.fetchrow(""" 
+            SELECT invite_link, expires, subscription_ends 
+            FROM tokens 
+            WHERE username = $1 
+            ORDER BY expires DESC 
             LIMIT 1
         """, username)
 
@@ -124,7 +115,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             invite_link = record["invite_link"]
             subscription_ends = record["subscription_ends"].replace(tzinfo=pytz.utc)
 
-            # Если ссылка активна — выводим её
             if expires > now:
                 await update.message.reply_text(
                     f"🔗 Вот твоя ссылка:\n{invite_link}\n\n"
@@ -134,24 +124,23 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
                 return
             else:
-                # Если ссылка просрочена
                 await update.message.reply_text(
                     "⏳ Твоя ссылка истекла. Обратись к администратору для получения новой."
                 )
                 return
 
         # Если активной ссылки нет, создаем новую
-        token = uuid.uuid4().hex[:8]  # Генерируем новый токен
-        invite_expires = now + datetime.timedelta(minutes=30)  # Срок действия ссылки 30 минут
-        subscription_ends = now + datetime.timedelta(hours=1)  # Подписка на 1 час
+        token = uuid.uuid4().hex[:8]
+        invite_expires = now + datetime.timedelta(minutes=30)
+        subscription_ends = now + datetime.timedelta(hours=1)
 
-        invite_expires_ts = int(invite_expires.timestamp())  # преобразуем в timestamp
+        invite_expires_ts = int(invite_expires.timestamp())
 
         try:
             invite: ChatInviteLink = await context.bot.create_chat_invite_link(
                 chat_id=CHANNEL_ID,
                 expire_date=invite_expires_ts,
-                member_limit=1  # Одноразовая ссылка
+                member_limit=1
             )
         except Exception as e:
             await update.message.reply_text("❗️ Ошибка при создании ссылки, попробуй позже.")
