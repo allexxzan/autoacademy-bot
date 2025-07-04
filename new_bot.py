@@ -473,10 +473,8 @@ async def main():
 
     logger.info("🚀 Бот запущен!")
 
-    # ===== 🧠 Ручной запуск =====
-    await application.initialize()
-    await application.start()
-    await application.updater.start_polling()  # не run_polling()
+    # Запуск polling
+    await application.updater.start_polling()  # Только это, без start()!
 
 if __name__ == "__main__":
     import asyncio
