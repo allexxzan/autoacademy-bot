@@ -131,12 +131,18 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         token = await conn.fetchrow("""
             SELECT * FROM tokens
             WHERE LOWER(username) = $1
-            ORDER BY expires DESC
+            ORDER BY created_at DESC
             LIMIT 1
         """, username.lower())
 
-    if not token:
-        # 🎯 Впервые пишет — создаём новую ссылку
+        if token:
+            # 🎯 Уже получал ссылку ранее — ничего больше не даём
+            await update.message.reply_text(
+                "⚠️ Ты уже получил ссылку. Повторно её может выдать только куратор."
+            )
+            return
+
+        # 🎯 Впервые — создаём новую ссылку
         try:
             new_invite = await context.bot.create_chat_invite_link(
                 chat_id=CHANNEL_ID,
@@ -151,11 +157,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         new_expires = now_utc + datetime.timedelta(minutes=30)
         new_ends = now_utc + datetime.timedelta(hours=1)
 
-        await conn.execute("DELETE FROM tokens WHERE LOWER(username) = $1", username.lower())
         await conn.execute("""
-            INSERT INTO tokens (token, username, user_id, invite_link, expires, subscription_ends, used)
-            VALUES ($1, $2, NULL, $3, $4, $5, FALSE)
-        """, uuid.uuid4().hex[:8], username.lower(), new_invite.invite_link, new_expires, new_ends)
+            INSERT INTO tokens (token, username, user_id, invite_link, expires, subscription_ends, used, created_at)
+            VALUES ($1, $2, NULL, $3, $4, $5, FALSE, $6)
+        """, uuid.uuid4().hex[:8], username.lower(), new_invite.invite_link, new_expires, new_ends, now_utc)
 
         expires_msk = new_expires.astimezone(MOSCOW_TZ).strftime('%Y-%m-%d %H:%M:%S %Z')
         ends_msk = new_ends.astimezone(MOSCOW_TZ).strftime('%Y-%m-%d %H:%M:%S %Z')
@@ -164,9 +169,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"🔗 Вот твоя ссылка:\n{new_invite.invite_link}\n\n"
             f"Срок действия: до {expires_msk}\n"
             f"Подписка до: {ends_msk}\n"
-            "Пожалуйста, используй её вовремя."
+            "Пожалуйста, используй её вовремя. Повторно получить можно только через куратора."
         )
-        return
 
     # 🎯 Уже есть запись — проверяем
     invite_expires = token["expires"].replace(tzinfo=pytz.utc)
