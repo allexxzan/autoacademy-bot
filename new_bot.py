@@ -126,25 +126,24 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             invite_link = record["invite_link"]
             subscription_ends = record["subscription_ends"].replace(tzinfo=pytz.utc)
 
-            if not used:
-                if expires > now:
-                    # Активная ссылка есть — показываем
-                    await update.message.reply_text(
-                        f"🔗 Вот твоя ссылка:\n{invite_link}\n\n"
-                        f"Срок действия: до {expires.astimezone(MOSCOW_TZ).strftime('%Y-%m-%d %H:%M:%S %Z')}\n"
-                        f"Подписка до: {subscription_ends.astimezone(MOSCOW_TZ).strftime('%Y-%m-%d %H:%M:%S %Z')}\n"
-                        f"Пожалуйста, используй её вовремя."
-                    )
-                    return
-                else:
-                    # Ссылка просрочена, но не использована — НЕ выдаём новую
-                    await update.message.reply_text(
-                        "⏳ Твоя ссылка истекла. Обратись к администратору для получения новой."
-                    )
-                    return
-            else:
-                # used=True — ссылка уже использована, можно выдавать новую ниже
+            if used:
+                # Если ссылка использована — даем новую
                 pass
+            elif expires > now:
+                # Если ссылка активна — выводим ее
+                await update.message.reply_text(
+                    f"🔗 Вот твоя ссылка:\n{invite_link}\n\n"
+                    f"Срок действия: до {expires.astimezone(MOSCOW_TZ).strftime('%Y-%m-%d %H:%M:%S %Z')}\n"
+                    f"Подписка до: {subscription_ends.astimezone(MOSCOW_TZ).strftime('%Y-%m-%d %H:%M:%S %Z')}\n"
+                    f"Пожалуйста, используй её вовремя."
+                )
+                return
+            else:
+                # Если ссылка просрочена — информируем
+                await update.message.reply_text(
+                    "⏳ Твоя ссылка истекла. Обратись к администратору для получения новой."
+                )
+                return
 
         if username not in context.application.bot_data.get("approved_usernames", set()):
             await update.message.reply_text(
