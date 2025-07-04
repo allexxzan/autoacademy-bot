@@ -103,127 +103,87 @@ async def send_to_google_sheets(user_id: int, username: str, first_name: str, st
 
 # ====== Старт ======
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    username = user.username
-    user_id = user.id
-
+    username = update.effective_user.username
     if not username:
-        await update.message.reply_text(
-            "❗️ У тебя не указан username в Telegram. Добавь его в настройках профиля."
-        )
+        await update.message.reply_text("❗️ Нужно, чтобы в профиле был установлен username.")
         return
 
-    approved = context.application.bot_data.get("approved_usernames", set())
-    if username.lower() not in approved:
-        await update.message.reply_text(
-            "⛔️ Ты не в списке учеников АвтоАкадемии. Доступ запрещён.\n"
-            "Если произошла ошибка, свяжись со своим куратором."
-        )
-        return
-
-    now_utc = datetime.datetime.utcnow().replace(tzinfo=pytz.utc)
+    username = username.lower()
+    now = datetime.datetime.utcnow()
 
     async with context.application.bot_data["db"].acquire() as conn:
-        token = await conn.fetchrow("""
-            SELECT * FROM tokens
-            WHERE LOWER(username) = $1
-            ORDER BY created_at DESC
+        record = await conn.fetchrow("""
+            SELECT invite_link, expires, subscription_ends, used
+            FROM tokens
+            WHERE username = $1
+            ORDER BY expires DESC
             LIMIT 1
-        """, username.lower())
+        """, username)
 
-        if token:
-            invite_expires = token["expires"].replace(tzinfo=pytz.utc)
-            subscription_ends = token["subscription_ends"].replace(tzinfo=pytz.utc)
-            used = token["used"]
-            stored_user_id = token["user_id"]
+        if record:
+            expires = record["expires"]
+            used = record["used"]
+            invite_link = record["invite_link"]
+            subscription_ends = record["subscription_ends"]
 
-            # 💀 Если старая неиспользованная ссылка, но уже истекла и никому не принадлежит — забудь про неё
-            if not used and stored_user_id is None and invite_expires < now_utc:
-                token = None  # сброс, чтобы ниже создать новую ссылку
-        
-        if token:
-            invite_expires = token["expires"].replace(tzinfo=pytz.utc)
-            subscription_ends = token["subscription_ends"].replace(tzinfo=pytz.utc)
-            used = token["used"]
-            stored_user_id = token["user_id"]
+            if not used:
+                if expires > now:
+                    # Активная ссылка есть — показываем
+                    await update.message.reply_text(
+                        f"🔗 Вот твоя ссылка:\n{invite_link}\n\n"
+                        f"Срок действия: до {expires.astimezone(MOSCOW_TZ).strftime('%Y-%m-%d %H:%M:%S %Z')}\n"
+                        f"Подписка до: {subscription_ends.astimezone(MOSCOW_TZ).strftime('%Y-%m-%d %H:%M:%S %Z')}\n"
+                        f"Пожалуйста, используй её вовремя."
+                    )
+                    return
+                else:
+                    # Ссылка просрочена, но не использована — НЕ выдаём новую
+                    await update.message.reply_text(
+                        "⏳ Твоя ссылка истекла. Обратись к администратору для получения новой."
+                    )
+                    return
+            else:
+                # used=True — ссылка уже использована, можно выдавать новую ниже
 
-            # 🕵️ Проверка на левака
-            if stored_user_id and stored_user_id != user_id:
-                await context.bot.send_message(
-                    chat_id=CURATOR_CHAT_ID,
-                    text=(
-                        f"🚨 *Подозрение на левака!*\n\n"
-                        f"👤 Юзер @{username} (id: `{user_id}`) запустил /start,\n"
-                        f"но в базе записан другой user_id: `{stored_user_id}`\n\n"
-                        f"Проверь, кто он такой."
-                    ),
-                    parse_mode="Markdown"
-                )
+                pass
 
-            # 🔒 Если уже использовал — просто напоминаем
-            if used and stored_user_id == user_id:
-                await update.message.reply_text(
-                    "⚠️ Ты уже использовал свою ссылку. Новую может выдать только куратор."
-                )
-                return
+        # Если записи нет или used=True — выдаём новую ссылку (только для новых или обнулённых)
 
-            # 🔒 Если срок ссылки истёк — но user_id совпадает
-            if invite_expires < now_utc and stored_user_id == user_id:
-                await update.message.reply_text(
-                    "⚠️ Срок действия твоей ссылки истёк. Новую может выдать только куратор."
-                )
-                return
-
-            # 🔄 Ссылка ещё валидна — просто напомним
-            expires_msk = invite_expires.astimezone(MOSCOW_TZ).strftime('%Y-%m-%d %H:%M:%S %Z')
-            ends_msk = subscription_ends.astimezone(MOSCOW_TZ).strftime('%Y-%m-%d %H:%M:%S %Z')
-
+        # Проверяем, что username есть в approved_usernames (если используешь такой список)
+        if username not in context.application.bot_data.get("approved_usernames", set()):
             await update.message.reply_text(
-                f"⚠️ Ты уже получил ссылку, которая ещё действует.\n"
-                f"Срок действия: до {expires_msk}\n"
-                f"Подписка до: {ends_msk}\n"
-                "Если ссылка не работает — обратись к куратору."
+                "❌ Твой username не найден в списке учеников. Обратись к куратору."
             )
-
-            # 🔐 При этом, если user_id ещё не записан — сохраняем
-            if stored_user_id is None:
-                await conn.execute("""
-                    UPDATE tokens
-                    SET user_id = $1
-                    WHERE id = $2
-                """, user_id, token["id"])
-
             return
 
-        # 📩 Первая выдача — создаём новую ссылку
+        # Создаём новую ссылку и записываем в базу
+        token = uuid.uuid4().hex[:8]
+        invite_expires = now + datetime.timedelta(minutes=30)
+        subscription_ends = now + datetime.timedelta(hours=1)
+
         try:
-            new_invite = await context.bot.create_chat_invite_link(
+            invite: ChatInviteLink = await context.bot.create_chat_invite_link(
                 chat_id=CHANNEL_ID,
-                expire_date=now_utc + datetime.timedelta(minutes=30),
+                expire_date=invite_expires,
                 member_limit=1
             )
         except Exception as e:
-            logger.error(f"Ошибка создания ссылки для @{username}: {e}", exc_info=True)
-            await update.message.reply_text("⚠️ Ошибка при создании ссылки. Обратись к куратору.")
+            await update.message.reply_text("❗️ Ошибка при создании ссылки, попробуй позже.")
+            logger.error(f"Ошибка создания ссылки для {username}: {e}", exc_info=True)
             return
 
-        new_expires = now_utc + datetime.timedelta(minutes=30)
-        new_ends = now_utc + datetime.timedelta(hours=1)
-
-        await conn.execute("""
-            INSERT INTO tokens (token, username, user_id, invite_link, expires, subscription_ends, used, created_at)
-            VALUES ($1, $2, $3, $4, $5, $6, FALSE, $7)
-        """, uuid.uuid4().hex[:8], username.lower(), user_id, new_invite.invite_link, new_expires, new_ends, now_utc)
-
-        expires_msk = new_expires.astimezone(MOSCOW_TZ).strftime('%Y-%m-%d %H:%M:%S %Z')
-        ends_msk = new_ends.astimezone(MOSCOW_TZ).strftime('%Y-%m-%d %H:%M:%S %Z')
+        async with context.application.bot_data["db"].acquire() as conn:
+            await conn.execute("""
+                INSERT INTO tokens (token, username, user_id, invite_link, expires, subscription_ends, used)
+                VALUES ($1, $2, NULL, $3, $4, $5, FALSE)
+            """, token, username, invite.invite_link, invite_expires, subscription_ends)
 
         await update.message.reply_text(
-            f"🔗 Вот твоя ссылка:\n{new_invite.invite_link}\n\n"
-            f"Срок действия: до {expires_msk}\n"
-            f"Подписка до: {ends_msk}\n"
-            "Пожалуйста, используй её вовремя. Повторно получить можно только через куратора."
-        )  
+            f"🔗 Вот твоя новая ссылка:\n{invite.invite_link}\n\n"
+            f"Срок действия: до {invite_expires.astimezone(MOSCOW_TZ).strftime('%Y-%m-%d %H:%M:%S %Z')}\n"
+            f"Подписка до: {subscription_ends.astimezone(MOSCOW_TZ).strftime('%Y-%m-%d %H:%M:%S %Z')}\n"
+            f"Пожалуйста, используй её вовремя."
+        )
         return
 
 # ====== Обработчик смены статуса участника в чате (например, вступление) ======
@@ -402,68 +362,39 @@ async def kick_expired_members(context: ContextTypes.DEFAULT_TYPE):
                 logger.warning(f"Не удалось обработать участника ID {user_id}: {e}", exc_info=True)
 
 # ====== Команда /sendlink — выдача новой ссылки приглашения ======
-
 async def sendlink(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Админская команда для сброса и выдачи новой ссылки приглашения ученику.
-    Проверяет, что пользователь есть в списке, деактивирует старые ссылки,
-    создаёт новую, записывает в базу и уведомляет админа.
-    """
     user = update.effective_user
     if user.id not in ADMINS:
         await update.message.reply_text("⛔️ Доступ запрещён.")
-        logger.warning(f"Пользователь {user.id} попытался использовать /sendlink без доступа")
         return
 
-    # Проверяем, передан ли username аргументом
     if not context.args:
         await update.message.reply_text("Используй: /sendlink @username")
         return
 
     username = context.args[0].lstrip("@").lower()
 
-    # Проверяем, есть ли пользователь в списке учеников
-    if username not in context.application.bot_data.get("approved_usernames", set()):
+    # Инициализация approved_usernames, если вдруг нет
+    if "approved_usernames" not in context.application.bot_data:
+        context.application.bot_data["approved_usernames"] = set()
+
+    if username not in context.application.bot_data["approved_usernames"]:
         await update.message.reply_text("❌ Пользователь не найден в списке учеников.")
         return
 
     now = datetime.datetime.utcnow()
+
     async with context.application.bot_data["db"].acquire() as conn:
-        # Проверяем, есть ли уже использованная ссылка для этого пользователя (т.е. он уже в канале)
-        existing = await conn.fetchrow("""
-            SELECT user_id FROM tokens
-            WHERE username = $1 AND used = TRUE AND user_id IS NOT NULL
+        # Деактивируем старые ссылки
+        await conn.execute("""
+            UPDATE tokens
+            SET used = TRUE,
+                user_id = NULL,
+                expires = NOW() - INTERVAL '1 second',
+                subscription_ends = NOW() - INTERVAL '1 second'
+            WHERE username = $1 AND used = FALSE
         """, username)
 
-        if existing:
-            try:
-                member = await context.bot.get_chat_member(CHANNEL_ID, existing["user_id"])
-                # Если пользователь уже в канале — предупреждаем админа
-                if member.status in ["member", "restricted"]:
-                    await update.message.reply_text(
-                        "⚠️ Ссылка ранее уже была использована. Убедись, что левак покинул канал."
-                    )
-                    logger.warning(f"Попытка повторной выдачи, но кто-то уже в канале под @{username}")
-                    return
-            except Exception as e:
-                logger.warning(f"Не удалось проверить участника {existing['user_id']}: {e}", exc_info=True)
-
-        # Деактивируем старые ссылки пользователя (если были)
-        old_links = await conn.fetch("SELECT invite_link FROM tokens WHERE username = $1", username)
-        for link_rec in old_links:
-            link = link_rec["invite_link"]
-            if link:
-                try:
-                    await context.bot.revoke_chat_invite_link(CHANNEL_ID, link)
-                    logger.info(f"Старая ссылка @{username} деактивирована.")
-                except Exception as e:
-                    logger.warning(f"Не удалось деактивировать старую ссылку @{username}: {e}", exc_info=True)
-
-        # Удаляем старые записи в базе для пользователя (чтобы потом создать новую)
-        await conn.execute("DELETE FROM tokens WHERE username = $1", username)
-
-        # Создаём новую ссылку и подписку
-        token = uuid.uuid4().hex[:8]
         invite_expires = now + datetime.timedelta(minutes=30)
         subscription_ends = now + datetime.timedelta(hours=1)
 
@@ -473,33 +404,33 @@ async def sendlink(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 expire_date=invite_expires,
                 member_limit=1
             )
-            logger.info(f"Создана новая ссылка для @{username}")
         except Exception as e:
-            logger.error(f"Ошибка создания ссылки для @{username}: {e}", exc_info=True)
             await update.message.reply_text("Ошибка при создании ссылки. Попробуйте позже.")
+            logger.error(f"Ошибка создания ссылки для @{username}: {e}", exc_info=True)
             return
 
-        # Вставляем новую запись в таблицу tokens
+        token = uuid.uuid4().hex[:8]
+
+        # Записываем новую ссылку
         await conn.execute("""
             INSERT INTO tokens (token, username, user_id, invite_link, expires, subscription_ends, used)
             VALUES ($1, $2, NULL, $3, $4, $5, FALSE)
         """, token, username, invite.invite_link, invite_expires, subscription_ends)
 
-        # Форматируем даты в московском часовом поясе для удобства
-        ends_msk = subscription_ends.replace(tzinfo=pytz.utc).astimezone(MOSCOW_TZ)
-        expires_msk = invite_expires.replace(tzinfo=pytz.utc).astimezone(MOSCOW_TZ)
+    # Обновляем кэш, если надо — тут не помешает
+    context.application.bot_data["approved_usernames"].add(username)
 
-        # Отправляем администратору результат
-        await update.message.reply_text(
-            f"♻️ Ссылка для @{username} обновлена и сброшены все предыдущие данные.\n"
-            f"Срок действия ссылки: {expires_msk.strftime('%Y-%m-%d %H:%M:%S %Z')}\n"
-            f"Подписка действует до: {ends_msk.strftime('%Y-%m-%d %H:%M:%S %Z')}\n"
-            f"Попроси ученика ввести /start и использовать ссылку."
-        )
-        logger.info(f"Выдана новая ссылка @{username} до {subscription_ends}")
+    ends_msk = subscription_ends.replace(tzinfo=pytz.utc).astimezone(MOSCOW_TZ)
+    expires_msk = invite_expires.replace(tzinfo=pytz.utc).astimezone(MOSCOW_TZ)
 
-        # Обновляем кэш approved_usernames в памяти бота
-        context.application.bot_data["approved_usernames"].add(username)
+    await update.message.reply_text(
+        f"♻️ Ссылка для @{username} обновлена и сброшены все предыдущие данные.\n"
+        f"Срок действия ссылки: {expires_msk.strftime('%Y-%m-%d %H:%M:%S %Z')}\n"
+        f"Подписка действует до: {ends_msk.strftime('%Y-%m-%d %H:%M:%S %Z')}\n"
+        f"Попроси ученика ввести /start и использовать ссылку."
+    )
+
+    return  # явно возвращаемся, чтоб не было путаницы
 
 # ====== Команда /addstudent — добавление нового ученика в список ======
 
