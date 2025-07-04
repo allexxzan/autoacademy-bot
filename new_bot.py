@@ -109,9 +109,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     username = username.lower()
-    
-    from datetime import datetime, timezone
-    now = datetime.now(timezone.utc)
+    now = datetime.datetime.utcnow()
 
     async with context.application.bot_data["db"].acquire() as conn:
         record = await conn.fetchrow("""
@@ -376,10 +374,6 @@ async def sendlink(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     username = context.args[0].lstrip("@").lower()
 
-    # Инициализация approved_usernames, если вдруг нет
-    if "approved_usernames" not in context.application.bot_data:
-        context.application.bot_data["approved_usernames"] = set()
-
     if username not in context.application.bot_data["approved_usernames"]:
         await update.message.reply_text("❌ Пользователь не найден в списке учеников.")
         return
@@ -387,7 +381,7 @@ async def sendlink(update: Update, context: ContextTypes.DEFAULT_TYPE):
     now = datetime.datetime.utcnow()
 
     async with context.application.bot_data["db"].acquire() as conn:
-        # Деактивируем старые ссылки
+        # Деактивируем старые ссылки (ставим used=True, user_id=NULL, expires в прошлое)
         await conn.execute("""
             UPDATE tokens
             SET used = TRUE,
@@ -400,10 +394,12 @@ async def sendlink(update: Update, context: ContextTypes.DEFAULT_TYPE):
         invite_expires = now + datetime.timedelta(minutes=30)
         subscription_ends = now + datetime.timedelta(hours=1)
 
+        invite_expires_ts = int(invite_expires.timestamp())  # переводим в timestamp
+
         try:
             invite: ChatInviteLink = await context.bot.create_chat_invite_link(
                 chat_id=CHANNEL_ID,
-                expire_date=invite_expires,
+                expire_date=invite_expires_ts,  # передаём timestamp
                 member_limit=1
             )
         except Exception as e:
@@ -419,9 +415,6 @@ async def sendlink(update: Update, context: ContextTypes.DEFAULT_TYPE):
             VALUES ($1, $2, NULL, $3, $4, $5, FALSE)
         """, token, username, invite.invite_link, invite_expires, subscription_ends)
 
-    # Обновляем кэш, если надо — тут не помешает
-    context.application.bot_data["approved_usernames"].add(username)
-
     ends_msk = subscription_ends.replace(tzinfo=pytz.utc).astimezone(MOSCOW_TZ)
     expires_msk = invite_expires.replace(tzinfo=pytz.utc).astimezone(MOSCOW_TZ)
 
@@ -432,10 +425,12 @@ async def sendlink(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Попроси ученика ввести /start и использовать ссылку."
     )
 
+    # Обновляем кэш, если надо
+    context.application.bot_data["approved_usernames"].add(username)
+
     return  # явно возвращаемся, чтоб не было путаницы
 
 # ====== Команда /addstudent — добавление нового ученика в список ======
-
 async def add_student(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Админская команда для добавления нового ученика (username).
