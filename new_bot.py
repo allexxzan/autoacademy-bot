@@ -186,11 +186,8 @@ async def request_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Ошибка при создании ссылки, попробуйте позже.")
 
 # --- Основной запуск ---
-import asyncio
-
-def main():
-    # Запускаем асинхронное подключение к БД в синхронном контексте
-    asyncio.run(db.connect())
+async def main():
+    await db.connect()
 
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
@@ -201,16 +198,19 @@ def main():
     app.add_handler(CommandHandler("kickexpired", kick_expired))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("stats", stats))
-
-    app.add_handler(CommandHandler("getlink", request_link))  # команда для студентов запросить ссылку
-
-    # TODO: добавить обработку chat_member_update
+    app.add_handler(CommandHandler("getlink", request_link))
 
     job_queue = app.job_queue
-    job_queue.run_repeating(kick_expired_subscriptions, interval=3600, first=10)  # автокик каждый час
+    job_queue.run_repeating(kick_expired_subscriptions, interval=3600, first=10)
 
     logger.info("Бот запущен и готов к работе.")
-    app.run_polling()  # Запускаем бесконечный polling, блокирующий вызов
+    await app.run_polling()  # ВАЖНО: это async функция!
 
+# Вместо asyncio.run(main()) — вот так:
 if __name__ == "__main__":
-    main()
+    import nest_asyncio
+    import asyncio
+
+    nest_asyncio.apply()  # 💡 фикс для "loop already running" и других ошибок с event loop
+
+    asyncio.run(main())
