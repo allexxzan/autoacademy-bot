@@ -16,6 +16,8 @@ ADMIN_IDS = list(map(int, os.getenv("ADMIN_IDS", "").split(','))) if os.getenv("
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+logger.info(f"Администраторы загружены: {ADMIN_IDS}")
+
 db = Database()
 
 # Помощь по правам
