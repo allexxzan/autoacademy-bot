@@ -1,31 +1,32 @@
-import os
-import asyncio
 import asyncpg
+import asyncio
+import os
 from dotenv import load_dotenv
 
+# Загрузка переменных окружения
 load_dotenv()
+
 DATABASE_URL = os.getenv("DATABASE_URL")
 
-async def create_tokens_table():
-    try:
-        conn = await asyncpg.connect(DATABASE_URL)
-        try:
-            await conn.execute("""
-                CREATE TABLE IF NOT EXISTS tokens (
-                    token TEXT PRIMARY KEY,
-                    username TEXT NOT NULL,
-                    user_id BIGINT,
-                    invite_link TEXT NOT NULL,
-                    expires TIMESTAMPTZ NOT NULL,
-                    subscription_ends TIMESTAMPTZ,
-                    used BOOLEAN DEFAULT FALSE
-                )
-            """)
-            print("✅ Таблица tokens успешно создана (или уже существует).")
-        finally:
-            await conn.close()
-    except Exception as e:
-        print(f"❌ Ошибка при создании таблицы tokens: {e}")
+CREATE_TABLE_QUERY = """
+CREATE TABLE IF NOT EXISTS students (
+    username TEXT PRIMARY KEY,
+    invite_link TEXT,
+    invite_created_at TIMESTAMP,
+    invite_sent_at TIMESTAMP,
+    activated_at TIMESTAMP,
+    valid_until TIMESTAMP,
+    kick_at TIMESTAMP,
+    join_date TIMESTAMP
+);
+"""
+
+async def init():
+    # Подключаемся к базе и создаём таблицу
+    conn = await asyncpg.connect(DATABASE_URL)
+    await conn.execute(CREATE_TABLE_QUERY)
+    await conn.close()
+    print("✅ Таблица 'students' успешно создана или уже существует.")
 
 if __name__ == "__main__":
-    asyncio.run(create_tokens_table())
+    asyncio.run(init())
