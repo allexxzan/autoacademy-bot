@@ -186,8 +186,11 @@ async def request_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Ошибка при создании ссылки, попробуйте позже.")
 
 # --- Основной запуск ---
-async def main():
-    await db.connect()
+import asyncio
+
+def main():
+    # Запускаем асинхронное подключение к БД в синхронном контексте
+    asyncio.run(db.connect())
 
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
@@ -201,13 +204,13 @@ async def main():
 
     app.add_handler(CommandHandler("getlink", request_link))  # команда для студентов запросить ссылку
 
-    # TODO: добавить обработку chat_member_update для отслеживания вступлений/выходов
+    # TODO: добавить обработку chat_member_update
 
     job_queue = app.job_queue
     job_queue.run_repeating(kick_expired_subscriptions, interval=3600, first=10)  # автокик каждый час
 
     logger.info("Бот запущен и готов к работе.")
-    await app.run_polling()
+    app.run_polling()  # Запускаем бесконечный polling, блокирующий вызов
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
