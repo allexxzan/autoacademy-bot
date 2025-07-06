@@ -73,14 +73,27 @@ class Database:
         async with self.pool.acquire() as conn:
             await conn.execute(query, username, activated_at, valid_until)
 
+    # --- Установить дату автокика ---
+    async def set_kick_time(self, username: str, when: datetime.datetime):
+        query = "UPDATE students SET kick_at = $2 WHERE username = $1"
+        async with self.pool.acquire() as conn:
+            await conn.execute(query, username, when)
+
+    # --- Сохранить user_id (один раз после запуска /start) ---
+    async def save_user_id(self, username: str, user_id: int):
+        query = "UPDATE students SET user_id = $2 WHERE username = $1 AND user_id IS NULL"
+        async with self.pool.acquire() as conn:
+            await conn.execute(query, username, user_id)
+
     # --- Получить список истекших подписок ---
     async def get_expired_students(self, now: datetime.datetime):
         query = """
-        SELECT username
+        SELECT username, user_id
         FROM students
         WHERE valid_until IS NOT NULL
           AND valid_until <= $1
           AND kick_at IS NULL
+          AND user_id IS NOT NULL
         """
         async with self.pool.acquire() as conn:
             rows = await conn.fetch(query, now)
