@@ -15,31 +15,37 @@ from db import Database  # Импортируем класс базы
 
 load_dotenv()
 
+# Загружаем переменные окружения
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
 ADMIN_IDS = list(map(int, os.getenv("ADMIN_IDS", "").split(','))) if os.getenv("ADMIN_IDS") else []
 CURATOR_ID = int(os.getenv("CURATOR_ID", "0"))
 
-logging.basicConfig(level=logging.INFO)
+# Настройка логгера
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# Здесь создаём экземпляр базы — он будет доступен во всём файле
+# Создаём экземпляр базы данных
 db = Database()
 
+# Проверка, является ли пользователь админом
 def is_admin(user_id: int) -> bool:
     return user_id in ADMIN_IDS
-
 
 # --- Команда /start ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     username = user.username.lower() if user.username else None
+    user_id = user.id
+
+    logger.info(f"/start от @{username} ({user_id})")
 
     if not username:
         await update.message.reply_text("⛔ У вас не задан username. Обратитесь к куратору.")
         return
 
     student = await db.get_student(username)
+    logger.info(f"Поиск @{username} в БД: {'Найден' if student else 'НЕ найден'}")
 
     if not student:
         await context.bot.send_message(CURATOR_ID, f"🚨 Левак: @{username} запустил бота.")
@@ -47,6 +53,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     now = datetime.datetime.utcnow()
+    logger.info(f"Текущий UTC: {now.isoformat()}")
 
     if student["valid_until"] and student["valid_until"] <= now:
         await update.message.reply_text("❌ Ваша подписка уже закончилась. Для повторного доступа — только через куратора.")
@@ -62,11 +69,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⚠️ Не удалось сгенерировать ссылку. Попробуйте позже.")
         return
 
+    logger.info(f"Выдана ссылка для @{username}: {invite_link}")
+
     await db.record_invite_sent(username, invite_link, now)
 
     valid_until = now + datetime.timedelta(days=365)
-
     await db.activate_subscription(username, now, valid_until)
+
+    await db.set_kick_time(username, valid_until)
+    await db.save_user_id(username, user_id)
 
     await update.message.reply_text(
         f"✅ Подписка активирована!\n"
@@ -75,25 +86,34 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🔗 Ссылка: {invite_link}"
     )
 
-
-import traceback  # ⚠️ Вставь это в самом верху файла, вне функции!
-
 # --- Генерация уникальной одноразовой ссылки ---
 async def generate_invite_link(bot, username: str) -> str | None:
     try:
         now = datetime.datetime.utcnow()
+        logger.info(f"Генерация ссылки для @{username}...")
+
         invite: ChatInviteLink = await bot.create_chat_invite_link(
             chat_id=CHANNEL_ID,
             expire_date=now + datetime.timedelta(hours=1),
             member_limit=1,
-            name=f"АвтоАкадемия @{username}"
+            creates_join_request=False,
+            name=f"АвтоАкадемия @{username} {now.strftime('%H:%M:%S')}"
         )
+
+        logger.info(f"Ссылка для @{username} создана: {invite.invite_link}")
+        logger.info(f"Срок действия до: {invite.expire_date}")
+        logger.info(f"invite.full: {invite.to_dict()}")
+
         return invite.invite_link
 
+    except TelegramError as e:
+        logger.error(f"[TG ERROR] Ошибка Telegram при генерации для @{username}: {e}")
+        logger.error(traceback.format_exc())
     except Exception as e:
-        logger.error(f"Ошибка генерации ссылки для @{username}: {e}")
-        logger.error(traceback.format_exc())  # 🔥 лог всей ошибки
-        return None
+        logger.error(f"[PYTHON ERROR] Ошибка генерации ссылки для @{username}: {e}")
+        logger.error(traceback.format_exc())
+
+    return None
 
 # --- Автоудаление по подписке ---
 async def kick_expired_subscriptions(context: ContextTypes.DEFAULT_TYPE):
@@ -104,22 +124,26 @@ async def kick_expired_subscriptions(context: ContextTypes.DEFAULT_TYPE):
 
     for student in expired_students:
         username = student["username"]
+        user_id = student["user_id"]
+
+        if not user_id:
+            logger.warning(f"Пропущен @{username}, нет user_id")
+            continue
 
         try:
-            await context.bot.ban_chat_member(CHANNEL_ID, student["user_id"], until_date=now + datetime.timedelta(seconds=60))
-            await context.bot.unban_chat_member(CHANNEL_ID, student["user_id"])
+            await context.bot.ban_chat_member(CHANNEL_ID, user_id, until_date=now + datetime.timedelta(seconds=60))
+            await context.bot.unban_chat_member(CHANNEL_ID, user_id)
 
             await db.mark_kicked(username, now)
 
             try:
-                await context.bot.send_message(student["user_id"], "⏳ Ваша подписка завершена. Доступ к каналу закрыт.")
+                await context.bot.send_message(user_id, "⏳ Ваша подписка завершена. Доступ к каналу закрыт.")
             except Exception:
                 pass
 
             logger.info(f"Кикнут @{username}")
         except Exception as e:
             logger.error(f"Ошибка при удалении @{username}: {e}")
-
 
 # --- Админ-команды ---
 async def add_student(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -133,7 +157,6 @@ async def add_student(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await db.add_student(username)
     await update.message.reply_text(f"✅ @{username} добавлен в базу.")
 
-
 async def deletestudent(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         return await update.message.reply_text("⛔ Нет доступа")
@@ -144,7 +167,6 @@ async def deletestudent(update: Update, context: ContextTypes.DEFAULT_TYPE):
     username = context.args[0].lstrip("@").lower()
     await db.delete_student(username)
     await update.message.reply_text(f"🗑️ @{username} удалён.")
-
 
 async def reset_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
@@ -157,7 +179,6 @@ async def reset_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await db.reset_link(username)
     await update.message.reply_text(f"♻️ Ссылка для @{username} сброшена.")
 
-
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         return
@@ -169,7 +190,6 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"✅ Активных: {active}\n"
         f"⌛ Просроченных: {expired}"
     )
-
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
@@ -185,7 +205,6 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/help — помощь"
     )
 
-
 async def kickexpired(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         return await update.message.reply_text("⛔ Нет доступа")
@@ -193,11 +212,9 @@ async def kickexpired(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await kick_expired_subscriptions(context)
     await update.message.reply_text("✅ Просроченные удалены.")
 
-
 # --- Молчанка для левых сообщений ---
 async def silent_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     pass
-
 
 # --- Запуск бота ---
 async def main():
@@ -218,7 +235,6 @@ async def main():
 
     logger.info("✅ Бот запущен")
     await app.run_polling()
-
 
 if __name__ == "__main__":
     import nest_asyncio
