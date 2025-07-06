@@ -78,6 +78,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+import traceback  # ⚠️ Вставь это в самом верху файла, вне функции!
+
 # --- Генерация уникальной одноразовой ссылки ---
 async def generate_invite_link(bot, username: str) -> str | None:
     try:
@@ -89,10 +91,11 @@ async def generate_invite_link(bot, username: str) -> str | None:
             name=f"АвтоАкадемия @{username}"
         )
         return invite.invite_link
+
     except Exception as e:
         logger.error(f"Ошибка генерации ссылки для @{username}: {e}")
+        logger.error(traceback.format_exc())  # 🔥 лог всей ошибки
         return None
-
 
 # --- Автоудаление по подписке ---
 async def kick_expired_subscriptions(context: ContextTypes.DEFAULT_TYPE):
