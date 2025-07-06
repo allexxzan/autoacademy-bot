@@ -1,32 +1,30 @@
-import os
+import traceback  # для показа полного стектрейса ошибок
 import logging
-import asyncio
 import datetime
+import asyncio
+import os
 
 from dotenv import load_dotenv
-from telegram import Update, ChatInviteLink
+from telegram import ChatInviteLink, Update
 from telegram.ext import (
-    ApplicationBuilder,
-    CommandHandler,
-    ContextTypes,
-    MessageHandler,
-    filters,
+    ApplicationBuilder, CommandHandler, ContextTypes, MessageHandler, filters
 )
+from telegram.error import TelegramError
 
-from db import Database  # Твоя база, будет переписана под структуру
+from db import Database  # Импортируем класс базы
 
 load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
 ADMIN_IDS = list(map(int, os.getenv("ADMIN_IDS", "").split(','))) if os.getenv("ADMIN_IDS") else []
-CURATOR_ID = int(os.getenv("CURATOR_ID", "0"))  # для оповещений о леваках
+CURATOR_ID = int(os.getenv("CURATOR_ID", "0"))
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Здесь создаём экземпляр базы — он будет доступен во всём файле
 db = Database()
-
 
 def is_admin(user_id: int) -> bool:
     return user_id in ADMIN_IDS
