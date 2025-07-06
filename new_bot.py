@@ -86,25 +86,22 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🔗 Ссылка: {invite_link}"
     )
 
-# --- Генерация уникальной одноразовой ссылки ---
+# --- Генерация уникальной ссылки без ограничений ---
 async def generate_invite_link(bot, username: str) -> str | None:
     try:
         now = datetime.datetime.utcnow()
         logger.info(f"Генерация ссылки для @{username}...")
 
-        invite: ChatInviteLink = await bot.create_chat_invite_link(
+        invite_link: ChatInviteLink = await bot.create_chat_invite_link(
             chat_id=CHANNEL_ID,
-            expire_date=now + datetime.timedelta(hours=1),
-            member_limit=1,
-            creates_join_request=False,
-            name=f"АвтоАкадемия @{username} {now.strftime('%H:%M:%S')}"
+            name=f"Тестовая ссылка без лимита для @{username}"
         )
 
-        logger.info(f"Ссылка для @{username} создана: {invite.invite_link}")
-        logger.info(f"Срок действия до: {invite.expire_date}")
-        logger.info(f"invite.full: {invite.to_dict()}")
+        logger.info(f"Ссылка для @{username} создана: {invite_link.invite_link}")
+        logger.info(f"Срок действия до: {invite_link.expire_date}")
+        logger.info(f"invite.full: {invite_link.to_dict()}")
 
-        return invite.invite_link
+        return invite_link.invite_link
 
     except TelegramError as e:
         logger.error(f"[TG ERROR] Ошибка Telegram при генерации для @{username}: {e}")
