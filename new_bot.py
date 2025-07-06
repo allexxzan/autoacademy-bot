@@ -7,7 +7,8 @@ import os
 from dotenv import load_dotenv
 from telegram import ChatInviteLink, Update
 from telegram.ext import (
-    ApplicationBuilder, CommandHandler, ContextTypes, MessageHandler, filters
+    ApplicationBuilder, CommandHandler, ContextTypes, MessageHandler, filters,
+    ChatMemberHandler
 )
 from telegram.error import TelegramError
 
@@ -142,6 +143,29 @@ async def kick_expired_subscriptions(context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.error(f"Ошибка при удалении @{username}: {e}")
 
+# --- Обработчик новых участников канала ---
+async def check_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_member = update.chat_member
+    new_user = chat_member.new_chat_member.user
+    username = new_user.username.lower() if new_user.username else None
+
+    if not username:
+        await context.bot.send_message(
+            CURATOR_ID,
+            f"🚨 В канал зашел пользователь без username: {new_user.id} ({new_user.first_name} {new_user.last_name or ''})"
+        )
+        return
+
+    student = await db.get_student(username)
+    if not student:
+        await context.bot.send_message(
+            CURATOR_ID,
+            f"🚨 Левак @{username} зашел в канал! user_id={new_user.id}"
+        )
+        # Если нужно, можно добавить кик:
+        # await context.bot.ban_chat_member(update.chat_member.chat.id, new_user.id)
+        # await context.bot.unban_chat_member(update.chat_member.chat.id, new_user.id)
+
 # --- Админ-команды ---
 async def add_student(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
@@ -227,6 +251,9 @@ async def main():
     app.add_handler(CommandHandler("stats", stats))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, silent_handler))
+
+    # Добавляем обработчик новых участников канала
+    app.add_handler(ChatMemberHandler(check_new_member, ChatMemberHandler.CHAT_MEMBER))
 
     app.job_queue.run_repeating(kick_expired_subscriptions, interval=3600, first=10)
 
