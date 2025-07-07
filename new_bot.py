@@ -305,12 +305,21 @@ async def main():
 if __name__ == "__main__":
     import asyncio
 
+    async def safe_main():
+        try:
+            await main()
+        except telegram.error.Conflict as e:
+            logger.warning(f"⚠️ Бот уже запущен где-то ещё: {e}. Выходим.")
+        except Exception as e:
+            logger.error(f"❌ Неожиданная ошибка: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+
     try:
-        asyncio.run(main())
-    except RuntimeError as e:
-        if str(e).startswith("This event loop is already running"):
-            loop = asyncio.get_event_loop()
-            loop.create_task(main())
-            loop.run_forever()
-        else:
-            raise
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        # Локально: event loop не запущен — запускаем как обычно
+        asyncio.run(safe_main())
+    else:
+        # Railway: event loop уже работает — запускаем в нём
+        loop.create_task(safe_main())
