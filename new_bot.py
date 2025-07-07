@@ -53,7 +53,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⛔ Канал доступен только ученикам АвтоАкадемии.")
         return
 
-    now = datetime.datetime.utcnow()
+    now = datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc)
+    now_msk = now.astimezone(datetime.timezone(datetime.timedelta(hours=3)))
+
     logger.info(f"Текущий UTC: {now.isoformat()}")
 
     if student["valid_until"] and student["valid_until"] <= now:
@@ -82,20 +84,24 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(
         f"✅ Подписка активирована!\n"
-        f"📅 Дата: {now.strftime('%Y-%m-%d %H:%M UTC')}\n"
-        f"⏳ Действует до: {valid_until.strftime('%Y-%m-%d %H:%M UTC')}\n"
+        f"📅 Дата: {now_msk.strftime('%Y-%m-%d %H:%M MSK')}\n"
+        f"⏳ Действует до: {(valid_until.astimezone(now_msk.tzinfo)).strftime('%Y-%m-%d %H:%M MSK')}\n"
         f"🔗 Ссылка: {invite_link}"
     )
 
-# --- Генерация уникальной ссылки без ограничений ---
+# --- Генерация уникальной ссылки ---
 async def generate_invite_link(bot, username: str) -> str | None:
     try:
         now = datetime.datetime.utcnow()
         logger.info(f"Генерация ссылки для @{username}...")
 
+        expire = now + datetime.timedelta(minutes=10)
         invite_link: ChatInviteLink = await bot.create_chat_invite_link(
             chat_id=CHANNEL_ID,
-            name=f"Тестовая ссылка без лимита для @{username}"
+            name=f"Ссылка для @{username}",
+            member_limit=1,
+            expire_date=expire,
+            creates_join_request=False
         )
 
         logger.info(f"Ссылка для @{username} создана: {invite_link.invite_link}")
@@ -171,12 +177,14 @@ async def add_student(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         return await update.message.reply_text("⛔ Нет доступа")
 
-    if not context.args:
-        return await update.message.reply_text("Использование: /addstudent @username")
+    if len(context.args) < 2:
+        return await update.message.reply_text("Использование: /addstudent @username ФИО")
 
     username = context.args[0].lstrip("@").lower()
-    await db.add_student(username)
+    full_name = " ".join(context.args[1:])
+    await db.add_student(username, full_name)
     await update.message.reply_text(f"✅ @{username} добавлен в базу.")
+
 
 async def deletestudent(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
@@ -218,7 +226,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(
         "🛠 Команды администратора:\n"
-        "/addstudent @username — добавить студента\n"
+        "/addstudent @username ФИО — добавить студента\n"
         "/resetlink @username — сбросить ссылку\n"
         "/deletestudent @username — удалить\n"
         "/kickexpired — кикнуть истекших\n"
