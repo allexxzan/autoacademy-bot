@@ -27,6 +27,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
 ADMIN_IDS = list(map(int, os.getenv("ADMIN_IDS", "").split(','))) if os.getenv("ADMIN_IDS") else []
 CURATOR_ID = int(os.getenv("CURATOR_ID", "0"))
+SUBSCRIPTION_MINUTES = int(os.getenv("SUBSCRIPTION_MINUTES", "10"))
 
 # Настройка логгера
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -60,7 +61,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     now = datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc)
-    valid_until = now + datetime.timedelta(minutes=10)
+    valid_until = now + datetime.timedelta(minutes=SUBSCRIPTION_MINUTES)
 
     logger.info(f"Текущий UTC: {now.isoformat()}")
 
@@ -183,12 +184,18 @@ async def check_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     now = datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc)
-    valid_until = now + datetime.timedelta(days=365)
+    valid_until = now + datetime.timedelta(minutes=SUBSCRIPTION_MINUTES)
+
 
     # Активируем подписку и обновляем время окончания
     await db.activate_subscription(username, now, valid_until)
     await db.set_kick_time(username, valid_until)
     await db.save_user_id(username, new_user.id)
+
+    await context.bot.send_message(
+        new_user.id,
+        f"✅ Вы присоединились к каналу. Подписка активирована на {SUBSCRIPTION_MINUTES} минут."
+    )
 
     logger.info(f"Подписка для @{username} активирована при вступлении в канал до {to_msk(valid_until).isoformat()}")
 
