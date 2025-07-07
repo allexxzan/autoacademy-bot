@@ -294,27 +294,12 @@ async def main():
     app.job_queue.run_repeating(kick_expired_subscriptions, interval=300, first=10)  # 300 секунд = 5 минут
 
     logger.info("✅ Бот запущен")
-    
-    try:
-        # Правильный запуск polling
-        await app.initialize()
-        await app.updater.start_polling()
-        
-        # Бесконечный цикл для поддержания работы бота
-        while True:
-            await asyncio.sleep(3600)  # Спим 1 час и проверяем снова
-            
-    except asyncio.CancelledError:
-        logger.info("🚦 Остановка бота...")
-    finally:
-        try:
-            if app.updater.running:
-                await app.updater.stop()
-            await app.shutdown()
-        except Exception as e:
-            logger.error(f"Ошибка при остановке: {e}")
-        finally:
-            await db.disconnect()
+    await app.run_polling()
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    import nest_asyncio
+    nest_asyncio.apply()
+
+    import asyncio
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(main())
