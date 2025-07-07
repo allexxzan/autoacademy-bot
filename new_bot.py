@@ -296,15 +296,25 @@ async def main():
     logger.info("✅ Бот запущен")
     
     try:
-        await app.initialize()  # Явная инициализация
-        await app.start_polling()  # Используем start_polling вместо run_polling
-        await asyncio.Event().wait()  # Бесконечное ожидание
+        # Правильный запуск polling
+        await app.initialize()
+        await app.updater.start_polling()
+        
+        # Бесконечный цикл для поддержания работы бота
+        while True:
+            await asyncio.sleep(3600)  # Спим 1 час и проверяем снова
+            
     except asyncio.CancelledError:
         logger.info("🚦 Остановка бота...")
     finally:
-        await app.stop()
-        await app.shutdown()
-        await db.disconnect()
+        try:
+            if app.updater.running:
+                await app.updater.stop()
+            await app.shutdown()
+        except Exception as e:
+            logger.error(f"Ошибка при остановке: {e}")
+        finally:
+            await db.disconnect()
 
 if __name__ == "__main__":
     asyncio.run(main())
