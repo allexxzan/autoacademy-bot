@@ -296,11 +296,13 @@ async def main():
     logger.info("✅ Бот запущен")
 
     try:
-        await app.run_polling()
-    except telegram.error.Conflict as e:
-        logger.warning(f"⚠️ Бот уже запущен где-то ещё: {e}. Выходим.")
-        import sys
-        sys.exit(0)
+        await app.initialize()
+        await app.start()
+        await app.updater.start_polling()
+        await app.updater.idle()
+    finally:
+        await app.stop()
+        await app.shutdown()
 
 if __name__ == "__main__":
     import asyncio
@@ -316,8 +318,11 @@ if __name__ == "__main__":
             logger.error(traceback.format_exc())
 
     try:
-        loop = asyncio.get_event_loop()
-        loop.create_task(safe_main())
-        loop.run_forever()
-    except KeyboardInterrupt:
-        logger.info("🛑 Остановка по Ctrl+C")
+        asyncio.run(safe_main())  # просто запускаем main в новом event loop
+    except RuntimeError as e:
+        if "already running" in str(e):
+            # если loop уже запущен (Railway, Jupyter)
+            loop = asyncio.get_running_loop()
+            loop.create_task(safe_main())
+        else:
+            raise
