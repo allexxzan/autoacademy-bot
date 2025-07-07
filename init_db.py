@@ -10,6 +10,7 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 CREATE_TABLE_QUERY = """
 CREATE TABLE IF NOT EXISTS students (
     username TEXT PRIMARY KEY,
+    full_name TEXT,
     user_id BIGINT,
     invite_link TEXT,
     invite_created_at TIMESTAMP,
