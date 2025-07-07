@@ -3,6 +3,7 @@ import logging
 import datetime
 import asyncio
 import os
+import telegram.error  # В начале файла с остальными импортами
 
 def to_msk(dt_utc: datetime.datetime) -> datetime.datetime:
     msk_tz = datetime.timezone(datetime.timedelta(hours=3))
@@ -293,9 +294,14 @@ async def main():
     app.job_queue.run_repeating(kick_expired_subscriptions, interval=300, first=10)  # 300 секунд = 5 минут
 
     logger.info("✅ Бот запущен")
-    await app.run_polling()
+
+    try:
+        await app.run_polling()
+    except telegram.error.Conflict as e:
+        logger.warning(f"⚠️ Бот уже запущен где-то ещё: {e}. Выходим.")
+        import sys
+        sys.exit(0)
 
 if __name__ == "__main__":
     import asyncio
     asyncio.run(main())
-
