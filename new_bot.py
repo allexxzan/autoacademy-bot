@@ -316,10 +316,8 @@ if __name__ == "__main__":
             logger.error(traceback.format_exc())
 
     try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        # Локально: event loop не запущен — запускаем как обычно
-        asyncio.run(safe_main())
-    else:
-        # Railway: event loop уже работает — запускаем в нём
+        loop = asyncio.get_event_loop()
         loop.create_task(safe_main())
+        loop.run_forever()
+    except KeyboardInterrupt:
+        logger.info("🛑 Остановка по Ctrl+C")
