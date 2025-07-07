@@ -294,35 +294,17 @@ async def main():
     app.job_queue.run_repeating(kick_expired_subscriptions, interval=300, first=10)  # 300 секунд = 5 минут
 
     logger.info("✅ Бот запущен")
-
+    
     try:
-        await app.initialize()
-        await app.start()
-        await app.updater.start_polling()
-        await app.updater.idle()
+        await app.initialize()  # Явная инициализация
+        await app.start_polling()  # Используем start_polling вместо run_polling
+        await asyncio.Event().wait()  # Бесконечное ожидание
+    except asyncio.CancelledError:
+        logger.info("🚦 Остановка бота...")
     finally:
         await app.stop()
         await app.shutdown()
+        await db.disconnect()
 
 if __name__ == "__main__":
-    import asyncio
-
-    async def safe_main():
-        try:
-            await main()
-        except telegram.error.Conflict as e:
-            logger.warning(f"⚠️ Бот уже запущен где-то ещё: {e}. Выходим.")
-        except Exception as e:
-            logger.error(f"❌ Неожиданная ошибка: {e}")
-            import traceback
-            logger.error(traceback.format_exc())
-
-    try:
-        asyncio.run(safe_main())  # просто запускаем main в новом event loop
-    except RuntimeError as e:
-        if "already running" in str(e):
-            # если loop уже запущен (Railway, Jupyter)
-            loop = asyncio.get_running_loop()
-            loop.create_task(safe_main())
-        else:
-            raise
+    asyncio.run(main())
