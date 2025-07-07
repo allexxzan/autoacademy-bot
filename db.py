@@ -100,6 +100,7 @@ class Database:
             rows = await conn.fetch(query, now)
             return [dict(r) for r in rows]
 
+
     # --- Пометить, что пользователь кикнут ---
     async def mark_kicked(self, username: str, kicked_at: datetime.datetime):
         query = "UPDATE students SET kick_at = $2 WHERE username = $1"
