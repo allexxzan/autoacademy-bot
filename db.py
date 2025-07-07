@@ -22,14 +22,15 @@ class Database:
             return await conn.fetchrow(query, username)
 
     # --- Добавить студента ---
-    async def add_student(self, username: str):
+    async def add_student(self, username: str, full_name: str):
         query = """
-        INSERT INTO students (username)
-        VALUES ($1)
+        INSERT INTO students (username, full_name)
+        VALUES ($1, $2)
         ON CONFLICT (username) DO NOTHING
         """
         async with self.pool.acquire() as conn:
-            await conn.execute(query, username)
+            await conn.execute(query, username, full_name)
+
 
     # --- Удалить студента ---
     async def delete_student(self, username: str):
