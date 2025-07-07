@@ -4,6 +4,12 @@ import datetime
 import asyncio
 import os
 
+def to_msk(dt_utc: datetime.datetime) -> datetime.datetime:
+    msk_tz = datetime.timezone(datetime.timedelta(hours=3))
+    if dt_utc.tzinfo is None:
+        dt_utc = dt_utc.replace(tzinfo=datetime.timezone.utc)
+    return dt_utc.astimezone(msk_tz)
+
 from dotenv import load_dotenv
 from telegram import ChatInviteLink, Update
 from telegram.ext import (
@@ -54,7 +60,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     now = datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc)
-    now_msk = now.astimezone(datetime.timezone(datetime.timedelta(hours=3)))
+    valid_until = now + datetime.timedelta(minutes=10)
 
     logger.info(f"Текущий UTC: {now.isoformat()}")
 
@@ -66,9 +72,19 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("📬 Ссылка уже была выдана. Обратитесь к куратору для новой.")
         return
 
-    # Генерация ссылки
-    invite_link = await generate_invite_link(context.bot, username)
-    if not invite_link:
+    # Генерация ссылки с 5-минутным сроком жизни
+    expire = now + datetime.timedelta(minutes=5)
+    try:
+        invite_link_obj = await context.bot.create_chat_invite_link(
+            chat_id=CHANNEL_ID,
+            name=f"Ссылка для @{username}",
+            member_limit=1,
+            expire_date=expire,
+            creates_join_request=False
+        )
+        invite_link = invite_link_obj.invite_link
+    except Exception as e:
+        logger.error(f"Ошибка при генерации ссылки для @{username}: {e}")
         await update.message.reply_text("⚠️ Не удалось сгенерировать ссылку. Попробуйте позже.")
         return
 
@@ -76,17 +92,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await db.record_invite_sent(username, invite_link, now)
 
-    valid_until = now + datetime.timedelta(days=365)
-    await db.activate_subscription(username, now, valid_until)
-
-    await db.set_kick_time(username, valid_until)
-    await db.save_user_id(username, user_id)
-
     await update.message.reply_text(
-        f"✅ Подписка активирована!\n"
-        f"📅 Дата: {now_msk.strftime('%Y-%m-%d %H:%M MSK')}\n"
-        f"⏳ Действует до: {(valid_until.astimezone(now_msk.tzinfo)).strftime('%Y-%m-%d %H:%M MSK')}\n"
-        f"🔗 Ссылка: {invite_link}"
+        f"🔗 Вот ваша уникальная ссылка для входа в канал:\n{invite_link}\n\n"
+        f"⚠️ Подписка активируется после перехода по ссылке и присоединения к каналу."
     )
 
 # --- Генерация уникальной ссылки ---
@@ -122,7 +130,8 @@ async def generate_invite_link(bot, username: str) -> str | None:
 # --- Автоудаление по подписке ---
 async def kick_expired_subscriptions(context: ContextTypes.DEFAULT_TYPE):
     logger.info("🧹 Проверка на кик просроченных...")
-    now = datetime.datetime.utcnow()
+
+    now = datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc)
 
     expired_students = await db.get_expired_students(now)
 
@@ -168,9 +177,20 @@ async def check_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
             CURATOR_ID,
             f"🚨 Левак @{username} зашел в канал! user_id={new_user.id}"
         )
-        # Если нужно, можно добавить кик:
+        # Если нужно, можно кикнуть сразу:
         # await context.bot.ban_chat_member(update.chat_member.chat.id, new_user.id)
         # await context.bot.unban_chat_member(update.chat_member.chat.id, new_user.id)
+        return
+
+    now = datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc)
+    valid_until = now + datetime.timedelta(days=365)
+
+    # Активируем подписку и обновляем время окончания
+    await db.activate_subscription(username, now, valid_until)
+    await db.set_kick_time(username, valid_until)
+    await db.save_user_id(username, new_user.id)
+
+    logger.info(f"Подписка для @{username} активирована при вступлении в канал до {to_msk(valid_until).isoformat()}")
 
 # --- Админ-команды ---
 async def add_student(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -263,19 +283,15 @@ async def main():
     # Добавляем обработчик новых участников канала
     app.add_handler(ChatMemberHandler(check_new_member, ChatMemberHandler.CHAT_MEMBER))
 
-    app.job_queue.run_repeating(kick_expired_subscriptions, interval=3600, first=10)
+    app.job_queue.run_repeating(kick_expired_subscriptions, interval=300, first=10)  # 300 секунд = 5 минут
 
     logger.info("✅ Бот запущен")
     await app.run_polling()
 
 if __name__ == "__main__":
-    import asyncio
     import nest_asyncio
+    nest_asyncio.apply()
 
-    nest_asyncio.apply()  # ← позволяет повторно использовать уже запущенный event loop
+    import asyncio
     loop = asyncio.get_event_loop()
-    loop.create_task(main())
-    loop.run_forever()
-
-
-
+    loop.run_until_complete(main())
