@@ -13,12 +13,12 @@ CREATE TABLE IF NOT EXISTS students (
     full_name TEXT,
     user_id BIGINT,
     invite_link TEXT,
-    invite_created_at TIMESTAMP,
-    invite_sent_at TIMESTAMP,
-    activated_at TIMESTAMP,
-    valid_until TIMESTAMP,
-    kick_at TIMESTAMP,
-    join_date TIMESTAMP
+    invite_created_at TIMESTAMPTZ,
+    invite_sent_at TIMESTAMPTZ,
+    activated_at TIMESTAMPTZ,
+    valid_until TIMESTAMPTZ,
+    kick_at TIMESTAMPTZ,
+    join_date TIMESTAMPTZ
 );
 """
 
