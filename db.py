@@ -38,6 +38,12 @@ class Database:
         async with self.pool.acquire() as conn:
             await conn.execute(query, username)
 
+    # --- Удалить студента по user_id (если нет username) ---
+    async def delete_student_by_id(self, user_id: int):
+        query = "DELETE FROM students WHERE user_id = $1"
+        async with self.pool.acquire() as conn:
+            await conn.execute(query, user_id)
+
     # --- Сбросить ссылку (ручной запрос от админа) ---
     async def reset_link(self, username: str):
         query = """
