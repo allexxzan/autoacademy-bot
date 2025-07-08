@@ -73,8 +73,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("📬 Ссылка уже была выдана. Обратитесь к куратору для новой.")
         return
 
-    # Генерация ссылки с 5-минутным сроком жизни
-    expire = now + datetime.timedelta(minutes=5)
+    # Генерация ссылки с 1-часовым сроком жизни
+    expire = now + datetime.timedelta(hours=1)
     try:
         invite_link_obj = await context.bot.create_chat_invite_link(
             chat_id=CHANNEL_ID,
