@@ -27,7 +27,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
 ADMIN_IDS = list(map(int, os.getenv("ADMIN_IDS", "").split(','))) if os.getenv("ADMIN_IDS") else []
 CURATOR_ID = int(os.getenv("CURATOR_ID", "0"))
-SUBSCRIPTION_MINUTES = int(os.getenv("SUBSCRIPTION_MINUTES", "10"))
+SUBSCRIPTION_MINUTES = int(os.getenv("SUBSCRIPTION_MINUTES", "525600"))
 
 # Настройка логгера
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
