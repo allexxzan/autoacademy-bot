@@ -3,7 +3,6 @@ import logging
 import datetime
 import asyncio
 import os
-import telegram.error  # В начале файла с остальными импортами
 
 def to_msk(dt_utc: datetime.datetime) -> datetime.datetime:
     msk_tz = datetime.timezone(datetime.timedelta(hours=3))
@@ -134,15 +133,19 @@ async def kick_expired_subscriptions(context: ContextTypes.DEFAULT_TYPE):
     logger.info("🧹 Проверка на кик просроченных...")
 
     now = datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc)
+    logger.info(f"🔍 Текущее UTC время: {now.isoformat()}")
 
     expired_students = await db.get_expired_students(now)
+
+    logger.info(f"👀 Найдено студентов с истёкшей подпиской: {len(expired_students)}")
+    logger.info(f"🧾 Кандидаты на кик: {[s['username'] for s in expired_students]}")
 
     for student in expired_students:
         username = student["username"]
         user_id = student["user_id"]
 
         if not user_id:
-            logger.warning(f"Пропущен @{username}, нет user_id")
+            logger.warning(f"⚠️ Пропущен @{username} — нет user_id")
             continue
 
         try:
@@ -154,17 +157,26 @@ async def kick_expired_subscriptions(context: ContextTypes.DEFAULT_TYPE):
             try:
                 await context.bot.send_message(user_id, "⏳ Ваша подписка завершена. Доступ к каналу закрыт.")
             except Exception:
-                pass
+                logger.warning(f"❗ Не удалось отправить сообщение @{username} после кика")
 
-            logger.info(f"Кикнут @{username}")
+            logger.info(f"✅ Кикнут @{username}")
         except Exception as e:
-            logger.error(f"Ошибка при удалении @{username}: {e}")
+            logger.error(f"💥 Ошибка при удалении @{username}: {e}")
 
 # --- Обработчик новых участников канала ---
 async def check_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_member = update.chat_member
     new_user = chat_member.new_chat_member.user
     username = new_user.username.lower() if new_user.username else None
+
+    # 👉 Фикс от ложных срабатываний
+    if chat_member.new_chat_member.status != "member":
+        logger.info(f"👻 @{username or new_user.id} не вступил — статус: {chat_member.new_chat_member.status}")
+        return
+
+    logger.debug(
+        f"[chat_member] @{username or new_user.id} status change: {chat_member.old_chat_member.status} → {chat_member.new_chat_member.status}"
+    )
 
     if not username:
         await context.bot.send_message(
@@ -179,7 +191,7 @@ async def check_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
             CURATOR_ID,
             f"🚨 Левак @{username} зашел в канал! user_id={new_user.id}"
         )
-        # Если нужно, можно кикнуть сразу:
+        # Можешь сразу кикать, если хочешь:
         # await context.bot.ban_chat_member(update.chat_member.chat.id, new_user.id)
         # await context.bot.unban_chat_member(update.chat_member.chat.id, new_user.id)
         return
@@ -187,8 +199,6 @@ async def check_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
     now = datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc)
     valid_until = now + datetime.timedelta(minutes=SUBSCRIPTION_MINUTES)
 
-
-    # Активируем подписку и обновляем время окончания
     await db.activate_subscription(username, now, valid_until)
     await db.set_kick_time(username, valid_until)
     await db.save_user_id(username, new_user.id)
