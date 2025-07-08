@@ -312,9 +312,11 @@ async def testkick(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Просрочим подписку на 10 минут назад
     expired_at = now - datetime.timedelta(minutes=10)
 
-    # Сбросим kicked_at, чтобы бот снова мог кикнуть
+    # Обновим подписку так, чтобы она была просрочена
     await db.activate_subscription(username, expired_at - datetime.timedelta(minutes=5), expired_at)
-    await db.set_kick_time(username, None)
+
+    # НЕ вызываем set_kick_time — просто не меняем kicked_at,
+    # чтобы бот мог кикнуть пользователя при следующем запуске автокика
 
     await update.message.reply_text(f"🔄 @{username} теперь считается просроченным. Ждём автокика или запускай /kickexpired.")
 
