@@ -153,13 +153,13 @@ async def kick_expired_subscriptions(context: ContextTypes.DEFAULT_TYPE):
             await context.bot.unban_chat_member(CHANNEL_ID, user_id)
 
             await db.mark_kicked(username, now)
+            logger.info(f"✅ Кикнут @{username}")
 
             try:
                 await context.bot.send_message(user_id, "⏳ Ваша подписка завершена. Доступ к каналу закрыт.")
             except Exception:
                 logger.warning(f"❗ Не удалось отправить сообщение @{username} после кика")
 
-            logger.info(f"✅ Кикнут @{username}")
         except Exception as e:
             logger.error(f"💥 Ошибка при удалении @{username}: {e}")
 
