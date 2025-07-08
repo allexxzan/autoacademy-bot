@@ -48,7 +48,6 @@ class Database:
         query = """
         UPDATE students
         SET invite_link = NULL,
-            invite_created_at = NULL,
             invite_sent_at = NULL
         WHERE username = $1
         """
@@ -60,7 +59,6 @@ class Database:
         query = """
         UPDATE students
         SET invite_link = $2,
-            invite_created_at = $3,
             invite_sent_at = $3
         WHERE username = $1
         """
@@ -68,17 +66,17 @@ class Database:
             await conn.execute(query, username, invite_link, sent_at)
 
     # --- Активировать подписку ---
-async def activate_subscription(self, username: str, activated_at: datetime.datetime, valid_until: datetime.datetime):
-    query = """
-    UPDATE students
-    SET activated_at = $2,
-        valid_until = $3,
-        join_date = $2,
-        kicked_at = NULL    -- Сбрасываем флаг кика, чтобы автокик сработал
-    WHERE username = $1
-    """
-    async with self.pool.acquire() as conn:
-        await conn.execute(query, username, activated_at, valid_until)
+    async def activate_subscription(self, username: str, activated_at: datetime.datetime, valid_until: datetime.datetime):
+        query = """
+        UPDATE students
+        SET activated_at = $2,
+            valid_until = $3,
+            join_date = $2,
+            kicked_at = NULL    -- Сбрасываем флаг кика, чтобы автокик сработал
+        WHERE username = $1
+        """
+        async with self.pool.acquire() as conn:
+            await conn.execute(query, username, activated_at, valid_until)
 
     # --- Сохранить user_id (один раз после запуска /start) ---
     async def save_user_id(self, username: str, user_id: int):
@@ -111,7 +109,7 @@ async def activate_subscription(self, username: str, activated_at: datetime.date
     async def get_stats(self):
         async with self.pool.acquire() as conn:
             total = await conn.fetchval("SELECT COUNT(*) FROM students")
-            now = datetime.datetime.utcnow()
+            now = datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc)
             active = await conn.fetchval("SELECT COUNT(*) FROM students WHERE valid_until > $1", now)
             expired = await conn.fetchval("SELECT COUNT(*) FROM students WHERE valid_until <= $1", now)
             return total, active, expired
