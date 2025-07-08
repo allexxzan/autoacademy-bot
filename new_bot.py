@@ -200,7 +200,6 @@ async def check_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
     valid_until = now + datetime.timedelta(minutes=SUBSCRIPTION_MINUTES)
 
     await db.activate_subscription(username, now, valid_until)
-    await db.set_kick_time(username, valid_until)
     await db.save_user_id(username, new_user.id)
 
     await context.bot.send_message(
