@@ -258,6 +258,25 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"⌛ Просроченных: {expired}"
     )
 
+# --- Удаление тех, кто не из базы ---
+async def kickuser(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return await update.message.reply_text("⛔ Нет доступа")
+
+    if not context.args or not context.args[0].isdigit():
+        return await update.message.reply_text("Использование: /kickuser <user_id>")
+
+    user_id = int(context.args[0])
+
+    try:
+        await context.bot.ban_chat_member(CHANNEL_ID, user_id)
+        await context.bot.unban_chat_member(CHANNEL_ID, user_id)
+        await db.delete_student_by_id(user_id)
+        await update.message.reply_text(f"✅ Пользователь с user_id={user_id} кикнут и удалён из базы.")
+    except Exception as e:
+        logger.error(f"Ошибка при кике user_id={user_id}: {e}")
+        await update.message.reply_text(f"❌ Не удалось кикнуть пользователя с user_id={user_id}. Ошибка: {e}")
+
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         return
@@ -279,6 +298,27 @@ async def kickexpired(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await kick_expired_subscriptions(context)
     await update.message.reply_text("✅ Просроченные удалены.")
 
+
+# --- Тестовая команда для отладки автокика ---
+async def testkick(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return await update.message.reply_text("⛔ Нет доступа")
+
+    if not context.args:
+        return await update.message.reply_text("Использование: /testkick @username")
+
+    username = context.args[0].lstrip("@").lower()
+    now = datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc)
+
+    # Просрочим подписку на 10 минут назад
+    expired_at = now - datetime.timedelta(minutes=10)
+
+    # Сбросим kicked_at, чтобы бот снова мог кикнуть
+    await db.activate_subscription(username, expired_at - datetime.timedelta(minutes=5), expired_at)
+    await db.set_kick_time(username, None)
+
+    await update.message.reply_text(f"🔄 @{username} теперь считается просроченным. Ждём автокика или запускай /kickexpired.")
+
 # --- Молчанка для левых сообщений ---
 async def silent_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     pass
@@ -289,6 +329,7 @@ async def main():
 
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
+    # --- Основные команды ---
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("addstudent", add_student))
     app.add_handler(CommandHandler("deletestudent", deletestudent))
@@ -296,12 +337,19 @@ async def main():
     app.add_handler(CommandHandler("kickexpired", kickexpired))
     app.add_handler(CommandHandler("stats", stats))
     app.add_handler(CommandHandler("help", help_command))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, silent_handler))
+    app.add_handler(CommandHandler("kickuser", kickuser))
+    
+    # --- Тестовая команда ---
+    app.add_handler(CommandHandler("testkick", testkick))  # ✅ Вот она
 
-    # Добавляем обработчик новых участников канала
+    # --- Хендлер на вступление в канал ---
     app.add_handler(ChatMemberHandler(check_new_member, ChatMemberHandler.CHAT_MEMBER))
 
-    app.job_queue.run_repeating(kick_expired_subscriptions, interval=300, first=10)  # 300 секунд = 5 минут
+    # --- Молчанка на все остальные сообщения ---
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, silent_handler))
+
+    # --- Планировщик автокика ---
+    app.job_queue.run_repeating(kick_expired_subscriptions, interval=300, first=10)
 
     logger.info("✅ Бот запущен")
     await app.run_polling()
