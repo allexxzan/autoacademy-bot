@@ -76,7 +76,7 @@ class Database:
 
     # --- Установить дату автокика ---
     async def set_kick_time(self, username: str, when: datetime.datetime):
-        query = "UPDATE students SET kick_at = $2 WHERE username = $1"
+        query = "UPDATE students SET kicked_at = $2 WHERE username = $1"
         async with self.pool.acquire() as conn:
             await conn.execute(query, username, when)
 
@@ -93,7 +93,7 @@ class Database:
         FROM students
         WHERE valid_until IS NOT NULL
           AND valid_until <= $1
-          AND kick_at IS NULL
+          AND kicked_at IS NULL
           AND user_id IS NOT NULL
         """
         async with self.pool.acquire() as conn:
@@ -103,7 +103,7 @@ class Database:
 
     # --- Пометить, что пользователь кикнут ---
     async def mark_kicked(self, username: str, kicked_at: datetime.datetime):
-        query = "UPDATE students SET kick_at = $2 WHERE username = $1"
+        query = "UPDATE students SET kicked_at = $2 WHERE username = $1"
         async with self.pool.acquire() as conn:
             await conn.execute(query, username, kicked_at)
 
