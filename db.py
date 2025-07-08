@@ -31,7 +31,6 @@ class Database:
         async with self.pool.acquire() as conn:
             await conn.execute(query, username, full_name)
 
-
     # --- Удалить студента ---
     async def delete_student(self, username: str):
         query = "DELETE FROM students WHERE username = $1"
@@ -69,22 +68,17 @@ class Database:
             await conn.execute(query, username, invite_link, sent_at)
 
     # --- Активировать подписку ---
-    async def activate_subscription(self, username: str, activated_at: datetime.datetime, valid_until: datetime.datetime):
-        query = """
-        UPDATE students
-        SET activated_at = $2,
-            valid_until = $3,
-            join_date = $2
-        WHERE username = $1
-        """
-        async with self.pool.acquire() as conn:
-            await conn.execute(query, username, activated_at, valid_until)
-
-    # --- Установить дату автокика ---
-    async def set_kick_time(self, username: str, when: datetime.datetime):
-        query = "UPDATE students SET kicked_at = $2 WHERE username = $1"
-        async with self.pool.acquire() as conn:
-            await conn.execute(query, username, when)
+async def activate_subscription(self, username: str, activated_at: datetime.datetime, valid_until: datetime.datetime):
+    query = """
+    UPDATE students
+    SET activated_at = $2,
+        valid_until = $3,
+        join_date = $2,
+        kicked_at = NULL    -- Сбрасываем флаг кика, чтобы автокик сработал
+    WHERE username = $1
+    """
+    async with self.pool.acquire() as conn:
+        await conn.execute(query, username, activated_at, valid_until)
 
     # --- Сохранить user_id (один раз после запуска /start) ---
     async def save_user_id(self, username: str, user_id: int):
