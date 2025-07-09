@@ -3,10 +3,11 @@ import logging
 import datetime
 import asyncio
 import os
+import re  # импортируем только один раз
 
 from sheets import log_subscription  # логгирование подписки в Google Sheets
 from telegram import ReplyKeyboardMarkup
-from telegram.ext import MessageHandler, filters
+from telegram.ext import MessageHandler, filters  # импортируем только один раз
 
 def to_msk(dt_utc: datetime.datetime) -> datetime.datetime:
     msk_tz = datetime.timezone(datetime.timedelta(hours=3))
@@ -17,10 +18,8 @@ def to_msk(dt_utc: datetime.datetime) -> datetime.datetime:
 from dotenv import load_dotenv
 from telegram import ChatInviteLink, Update
 from telegram.ext import (
-    ApplicationBuilder, CommandHandler, ContextTypes, MessageHandler, filters,
-    ChatMemberHandler
+    ApplicationBuilder, CommandHandler, ContextTypes, ChatMemberHandler
 )
-import re
 from telegram.error import TelegramError
 
 from db import Database  # Импортируем класс базы
@@ -420,7 +419,7 @@ async def main():
     app.add_handler(CommandHandler("kickuser", kickuser))
 
     # --- Обработчик кнопки "Старт" с игнорированием регистра ---
-    app.add_handler(MessageHandler(filters.Regex("^Старт$", flags=re.IGNORECASE), on_start_button))
+    app.add_handler(MessageHandler(filters.Regex("^(?i)старт$"), on_start_button))
 
     # --- Тестовая команда ---
     app.add_handler(CommandHandler("testkick", testkick))  # ✅ Вот она
