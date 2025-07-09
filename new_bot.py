@@ -418,7 +418,7 @@ async def main():
     app.add_handler(CommandHandler("kickuser", kickuser))
 
 # --- Обработчик кнопки "Старт" с игнорированием регистра ---
-    app.add_handler(MessageHandler(filters.Regex("^Старт$", flags=re.IGNORECASE), on_start_button))
+    app.add_handler(MessageHandler(filters.Regex("^Старт$", re.IGNORECASE), on_start_button))
 
     # --- Тестовая команда ---
     app.add_handler(CommandHandler("testkick", testkick))  # ✅ Вот она
