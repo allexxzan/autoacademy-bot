@@ -14,6 +14,12 @@ class Database:
     async def connect(self):
         self.pool = await asyncpg.create_pool(DATABASE_URL)
 
+    # --- Пометить, что напоминание отправлено ---
+    async def mark_reminded(self, username: str):
+        query = "UPDATE students SET reminded = TRUE WHERE username = $1"
+        async with self.pool.acquire() as conn:
+            await conn.execute(query, username)
+
     # --- Получить студента ---
     async def get_student(self, username: str):
         query = "SELECT * FROM students WHERE username = $1"
@@ -83,6 +89,21 @@ class Database:
         async with self.pool.acquire() as conn:
             await conn.execute(query, username, user_id)
 
+    async def get_students_near_expiry(self, now):
+        target = now + datetime.timedelta(days=3)
+        window_start = target
+        window_end = target + datetime.timedelta(minutes=5)
+
+        query = """
+        SELECT * FROM students
+        WHERE valid_until > $1
+          AND valid_until <= $2
+          AND reminded = FALSE
+          AND kicked_at IS NULL
+        """
+        async with self.pool.acquire() as conn:
+            return await conn.fetch(query, window_start, window_end)
+
     # --- Получить список истекших подписок ---
     async def get_expired_students(self, now: datetime.datetime):
         query = """
@@ -96,7 +117,6 @@ class Database:
         async with self.pool.acquire() as conn:
             rows = await conn.fetch(query, now)
             return [dict(r) for r in rows]
-
 
     # --- Пометить, что пользователь кикнут ---
     async def mark_kicked(self, username: str, kicked_at: datetime.datetime):
