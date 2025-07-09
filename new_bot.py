@@ -4,6 +4,8 @@ import datetime
 import asyncio
 import os
 from sheets import log_subscription  # логгирование подписки в Google Sheets
+from telegram import ReplyKeyboardMarkup
+from telegram.ext import MessageHandler, filters
 
 def to_msk(dt_utc: datetime.datetime) -> datetime.datetime:
     msk_tz = datetime.timezone(datetime.timedelta(hours=3))
@@ -43,6 +45,15 @@ def is_admin(user_id: int) -> bool:
 
 # --- Команда /start ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard = [["Старт"]]  # кнопка "Старт" снизу
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
+
+    await update.message.reply_text(
+        "Получи доступ к закрытому каналу АвтоАкадемии.\n"
+        "Нажми кнопку «Старт» ниже, чтобы получить ссылку и активировать подписку.",
+        reply_markup=reply_markup
+    )
+
     user = update.effective_user
     username = user.username.lower() if user.username else None
     user_id = user.id
@@ -74,7 +85,37 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("📬 Ссылка уже была выдана. Обратитесь к куратору для новой.")
         return
 
-    # Генерация ссылки с 1-часовым сроком жизни
+import re  # для флага игнорирования регистра
+
+async def on_start_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    username = user.username.lower() if user.username else None
+    user_id = user.id
+
+    logger.info(f"Кнопка Старт нажата @{username} ({user_id})")
+
+    if not username:
+        await update.message.reply_text("⛔ У вас не задан username. Обратитесь к куратору.")
+        return
+
+    student = await db.get_student(username)
+    logger.info(f"Поиск @{username} в БД: {'Найден' if student else 'НЕ найден'}")
+
+    if not student:
+        await context.bot.send_message(CURATOR_ID, f"🚨 Левак: @{username} нажал кнопку Старт.")
+        await update.message.reply_text("⛔ Канал доступен только ученикам АвтоАкадемии.")
+        return
+
+    now = datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc)
+
+    if student["valid_until"] and student["valid_until"] <= now:
+        await update.message.reply_text("❌ Ваша подписка уже закончилась. Для повторного доступа — только через куратора.")
+        return
+
+    if student["invite_sent_at"]:
+        await update.message.reply_text("📬 Ссылка уже была выдана. Обратитесь к куратору для новой.")
+        return
+
     expire = now + datetime.timedelta(hours=1)
     try:
         invite_link_obj = await context.bot.create_chat_invite_link(
@@ -164,6 +205,36 @@ async def kick_expired_subscriptions(context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.error(f"💥 Ошибка при удалении @{username}: {e}")
 
+async def remind_expiring_subscriptions(context: ContextTypes.DEFAULT_TYPE):
+    now = datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc)
+    logger.info("📢 Проверка на напоминания...")
+
+    students = await db.get_students_near_expiry(now + datetime.timedelta(days=3))
+
+    logger.info(f"🔔 Напоминаний к отправке: {len(students)}")
+
+    for student in students:
+        username = student["username"]
+        user_id = student["user_id"]
+        full_name = student["full_name"]
+        valid_until = student["valid_until"]
+
+        if not user_id:
+            logger.warning(f"❌ @{username} без user_id — не отправляем напоминание")
+            continue
+
+        try:
+            await context.bot.send_message(
+                user_id,
+                f"⏰ Привет, {full_name}!\n"
+                f"Через 3 дня заканчивается твоя подписка на канал.\n"
+                f"Если хочешь остаться — свяжись с куратором."
+            )
+            await db.mark_reminded(username)
+            logger.info(f"✅ Напоминание отправлено @{username}")
+        except Exception as e:
+            logger.error(f"❗ Ошибка при отправке напоминания @{username}: {e}")
+
 # --- Обработчик новых участников канала ---
 async def check_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_member = update.chat_member
@@ -205,7 +276,7 @@ async def check_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await context.bot.send_message(
         new_user.id,
-        f"✅ Вы присоединились к каналу. Подписка активирована на {SUBSCRIPTION_MINUTES} минут."
+        f"✅ Вы присоединились к каналу. Подписка активирована на 365 дней."
     )
 
     try:
@@ -345,7 +416,10 @@ async def main():
     app.add_handler(CommandHandler("stats", stats))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("kickuser", kickuser))
-    
+
+# --- Обработчик кнопки "Старт" с игнорированием регистра ---
+    app.add_handler(MessageHandler(filters.Regex("^Старт$", flags=re.IGNORECASE), on_start_button))
+
     # --- Тестовая команда ---
     app.add_handler(CommandHandler("testkick", testkick))  # ✅ Вот она
 
@@ -356,7 +430,10 @@ async def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, silent_handler))
 
     # --- Планировщик автокика ---
-    app.job_queue.run_repeating(kick_expired_subscriptions, interval=300, first=10)
+    app.job_queue.run_repeating(kick_expired_subscriptions, interval=86400, first=20)  # Каждые 24 часа
+
+    # --- Оповещение за 3 дня до истечения подписки ---
+    app.job_queue.run_repeating(remind_expiring_subscriptions, interval=86400, first=20) 
 
     logger.info("✅ Бот запущен")
     await app.run_polling()
