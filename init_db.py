@@ -18,7 +18,8 @@ CREATE TABLE IF NOT EXISTS students (
     activated_at TIMESTAMPTZ,
     valid_until TIMESTAMPTZ,
     kick_at TIMESTAMPTZ,
-    join_date TIMESTAMPTZ
+    join_date TIMESTAMPTZ,
+    reminded BOOLEAN DEFAULT FALSE  -- Добавлено поле reminded
 );
 """
 
