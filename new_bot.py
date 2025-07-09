@@ -3,6 +3,7 @@ import logging
 import datetime
 import asyncio
 import os
+from sheets import log_subscription  # логгирование подписки в Google Sheets
 
 def to_msk(dt_utc: datetime.datetime) -> datetime.datetime:
     msk_tz = datetime.timezone(datetime.timedelta(hours=3))
@@ -206,6 +207,11 @@ async def check_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
         new_user.id,
         f"✅ Вы присоединились к каналу. Подписка активирована на {SUBSCRIPTION_MINUTES} минут."
     )
+
+    try:
+        log_subscription(username, student["full_name"], now, valid_until)
+    except Exception as e:
+        logger.error(f"Не удалось залогировать подписку @{username} в Google Sheets: {e}")
 
     logger.info(f"Подписка для @{username} активирована при вступлении в канал до {to_msk(valid_until).isoformat()}")
 
