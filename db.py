@@ -18,13 +18,13 @@ class Database:
     async def mark_reminded(self, username: str):
         query = "UPDATE students SET reminded = TRUE WHERE username = $1"
         async with self.pool.acquire() as conn:
-            await conn.execute(query, username)
+            await conn.execute(query, username.lower())
 
     # --- Получить студента ---
     async def get_student(self, username: str):
         query = "SELECT * FROM students WHERE username = $1"
         async with self.pool.acquire() as conn:
-            return await conn.fetchrow(query, username)
+            return await conn.fetchrow(query, username.lower())
 
     # --- Добавить студента ---
     async def add_student(self, username: str, full_name: str):
@@ -34,13 +34,13 @@ class Database:
         ON CONFLICT (username) DO NOTHING
         """
         async with self.pool.acquire() as conn:
-            await conn.execute(query, username, full_name)
+            await conn.execute(query, username.lower(), full_name)
 
     # --- Удалить студента ---
     async def delete_student(self, username: str):
         query = "DELETE FROM students WHERE username = $1"
         async with self.pool.acquire() as conn:
-            await conn.execute(query, username)
+            await conn.execute(query, username.lower())
 
     # --- Удалить студента по user_id (если нет username) ---
     async def delete_student_by_id(self, user_id: int):
@@ -57,7 +57,7 @@ class Database:
         WHERE username = $1
         """
         async with self.pool.acquire() as conn:
-            await conn.execute(query, username)
+            await conn.execute(query, username.lower())
 
     # --- Зафиксировать отправку ссылки ---
     async def record_invite_sent(self, username: str, invite_link: str, sent_at: datetime.datetime):
@@ -68,7 +68,7 @@ class Database:
         WHERE username = $1
         """
         async with self.pool.acquire() as conn:
-            await conn.execute(query, username, invite_link, sent_at)
+            await conn.execute(query, username.lower(), invite_link, sent_at)
 
     # --- Активировать подписку ---
     async def activate_subscription(self, username: str, activated_at: datetime.datetime, valid_until: datetime.datetime):
@@ -81,13 +81,13 @@ class Database:
         WHERE username = $1
         """
         async with self.pool.acquire() as conn:
-            await conn.execute(query, username, activated_at, valid_until)
+            await conn.execute(query, username.lower(), activated_at, valid_until)
 
     # --- Сохранить user_id (один раз после запуска /start) ---
     async def save_user_id(self, username: str, user_id: int):
         query = "UPDATE students SET user_id = $2 WHERE username = $1 AND user_id IS NULL"
         async with self.pool.acquire() as conn:
-            await conn.execute(query, username, user_id)
+            await conn.execute(query, username.lower(), user_id)
 
     async def get_students_near_expiry(self, now):
         target = now + datetime.timedelta(days=3)
@@ -122,7 +122,7 @@ class Database:
     async def mark_kicked(self, username: str, kicked_at: datetime.datetime):
         query = "UPDATE students SET kicked_at = $2 WHERE username = $1"
         async with self.pool.acquire() as conn:
-            await conn.execute(query, username, kicked_at)
+            await conn.execute(query, username.lower(), kicked_at)
 
     # --- Получить статистику ---
     async def get_stats(self):
